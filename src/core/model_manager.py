@@ -145,6 +145,11 @@ class ModelManager:
             torch_dtype=torch.float16 if self.device != "cpu" else torch.float32,
         )
         
+        # Ensure padding token is set (for models like Phi-2)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        
         if load_lora and lora_path:
             self._load_lora_adapter(lora_path)
             self.is_fine_tuned = True
