@@ -273,11 +273,16 @@ class CodeMindAdapter:
                 skipped_keys.append(f"{og_key} (deprecated in new architecture)")
                 continue
             
-            # Mapping for older MLP architectures (GELU -> SwiGLU)
+            # Mapping for older MLP architectures (GELU -> SwiGLU) and MoE migration
             if "mlp.dense_h_to_4h" in key:
                 # Try to map to both gate_proj and up_proj
                 for sub in ["gate_proj", "up_proj"]:
-                    new_key = key.replace("mlp.dense_h_to_4h", f"mlp.{sub}")
+                    # check if we are mapping to MoE expert 0
+                    if getattr(self.model.config, "num_experts", 1) > 1:
+                        new_key = key.replace("mlp.dense_h_to_4h", f"mlp.experts.0.{sub}")
+                    else:
+                        new_key = key.replace("mlp.dense_h_to_4h", f"mlp.{sub}")
+                        
                     if new_key in model_state and new_key not in filtered_state:
                         if value.shape == model_state[new_key].shape:
                             filtered_state[new_key] = value
@@ -290,7 +295,83 @@ class CodeMindAdapter:
                 continue
             
             if "mlp.dense_4h_to_h" in key:
-                new_key = key.replace("mlp.dense_4h_to_h", "mlp.down_proj")
+                if getattr(self.model.config, "num_experts", 1) > 1:
+                    new_key = key.replace("mlp.dense_4h_to_h", "mlp.experts.0.down_proj")
+                else:
+                    new_key = key.replace("mlp.dense_4h_to_h", "mlp.down_proj")
+                if new_key in model_state:
+                    if value.shape == model_state[new_key].shape:
+                        filtered_state[new_key] = value
+                        matched_keys += 1
+                    else:
+                        adapted = self._adapt_checkpoint_tensor(new_key, value, model_state[new_key])
+                        if adapted is not None:
+                            filtered_state[new_key] = adapted
+                            adapted_keys += 1
+                continue
+                
+            # Direct SwiGLU to MoE mapping for newer checkpoints being loaded into MoE models
+            if "mlp.gate_proj" in key or "mlp.up_proj" in key or "mlp.down_proj" in key:
+                if getattr(self.model.config, "num_experts", 1) > 1 and "experts" not in key:
+                    new_key = key.replace("mlp.", "mlp.experts.0.")
+                    if new_key in model_state:
+                        if value.shape == model_state[new_key].shape:
+                            filtered_state[new_key] = value
+                            matched_keys += 1
+                        else:
+                            adapted = self._adapt_checkpoint_tensor(new_key, value, model_state[new_key])
+                            if adapted is not None:
+                                filtered_state[new_key] = adapted
+                                adapted_keys += 1
+                    continue
+                    
+            # MHA -> GQA migration
+            if "attention.query_key_value" in key:
+                # Old MHA fused projection: [3 * hidden_size, hidden_size]
+                # Split it into q, k, v
+                d_model = self.model.config.hidden_size
+                num_heads = self.model.config.num_attention_heads
+                head_dim = self.model.config.head_dim
+                num_kv_heads = getattr(self.model.config, "num_key_value_heads", num_heads)
+                
+                # Check if the shape matches the old combined projection shape
+                if value.shape[0] == 3 * d_model:
+                    # reshape to [3, num_heads, head_dim, d_model]
+                    qkv = value.view(3, num_heads, head_dim, -1)
+                    old_q = qkv[0].reshape(num_heads * head_dim, -1)
+                    old_k = qkv[1].reshape(num_heads * head_dim, -1)
+                    old_v = qkv[2].reshape(num_heads * head_dim, -1)
+                    
+                    q_key = key.replace("query_key_value", "q_proj")
+                    k_key = key.replace("query_key_value", "k_proj")
+                    v_key = key.replace("query_key_value", "v_proj")
+                    
+                    if q_key in model_state:
+                        filtered_state[q_key] = old_q
+                        matched_keys += 1
+                        
+                    if k_key in model_state:
+                        # GQA adapter: if num_kv_heads < num_heads, we average the heads
+                        if num_kv_heads < num_heads:
+                            num_kv_groups = num_heads // num_kv_heads
+                            # shape: [num_kv_heads, num_kv_groups, head_dim, d_model]
+                            grouped_k = old_k.view(num_kv_heads, num_kv_groups, head_dim, -1)
+                            grouped_v = old_v.view(num_kv_heads, num_kv_groups, head_dim, -1)
+                            
+                            # Average over the groups
+                            old_k = grouped_k.mean(dim=1).reshape(num_kv_heads * head_dim, -1)
+                            old_v = grouped_v.mean(dim=1).reshape(num_kv_heads * head_dim, -1)
+                            
+                        filtered_state[k_key] = old_k
+                        filtered_state[v_key] = old_v
+                        matched_keys += 2 # one for K, one for V
+                else:
+                    skipped_keys.append(f"{og_key} -> cannot split, shape {value.shape} != 3x{d_model}")
+                    shape_mismatches += 1
+                continue
+                
+            if "attention.dense.weight" in key:
+                new_key = key.replace("attention.dense", "attention.o_proj")
                 if new_key in model_state:
                     if value.shape == model_state[new_key].shape:
                         filtered_state[new_key] = value

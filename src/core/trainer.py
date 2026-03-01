@@ -56,12 +56,6 @@ class LoRATrainer:
                 "model.lora.target_modules", ["q_proj", "v_proj"]
             )
 
-            # CodeMind check (adapter might be active)
-            if self.model_manager.is_codemind or model.__class__.__name__ == "CodeMindForCausalLM":
-                # For CodeMind, target_modules should be query_key_value and dense
-                if target_modules == ["q_proj", "v_proj"] or target_modules == ["q_proj", "v_proj", "k_proj", "o_proj"]:
-                     target_modules = ["query_key_value", "dense"]
-            
             # Verify target modules exist
             verified_targets = []
             for name, module in model.named_modules():
@@ -78,9 +72,11 @@ class LoRATrainer:
                 linear_layers = set()
                 for name, module in model.named_modules():
                     if isinstance(module, torch.nn.Linear):
-                         linear_layers.add(name.split(".")[-1])
+                        module_name = name.split(".")[-1]
+                        if module_name not in ["lm_head", "word_embeddings", "embed_tokens"]:
+                            linear_layers.add(module_name)
                 verified_targets = list(linear_layers)
-                self.logger.info(f"Yedek hedef modüller: {verified_targets}")
+                self.logger.info(f"Yedek hedef modüller {verified_targets}")
 
             lora_config = LoraConfig(
                 r=self.config.get("model.lora.r", 16),

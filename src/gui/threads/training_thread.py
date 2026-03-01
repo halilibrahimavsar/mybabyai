@@ -48,5 +48,6 @@ class TrainingThread(QThread):
                 raise ValueError(f"Geçersiz eğitim modu: {self.mode}")
 
             self.finished.emit(metrics)
-        except Exception as e:
-            self.error.emit(str(e))
+        except (Exception, KeyboardInterrupt) as e:
+            msg = "Eğitim durduruldu (Kullanıcı iptali)." if isinstance(e, KeyboardInterrupt) else str(e)
+            self.error.emit(msg)

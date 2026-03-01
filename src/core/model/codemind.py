@@ -36,6 +36,7 @@ class CodeMindConfig(PretrainedConfig):
         hidden_size: int = 1024,
         num_hidden_layers: int = 24,
         num_attention_heads: int = 16,
+        num_key_value_heads: Optional[int] = None,
         intermediate_size: int = 4096,
         max_position_embeddings: int = 2048,
         rms_norm_eps: float = 1e-6,
@@ -43,6 +44,7 @@ class CodeMindConfig(PretrainedConfig):
         attention_dropout: float = 0.0,
         activation: str = "silu",
         rotary_pct: float = 1.0,
+        rope_scaling: Optional[Dict[str, Any]] = None,
         use_cache: bool = True,
         tie_word_embeddings: bool = True,
         output_attentions: bool = False,
@@ -53,6 +55,12 @@ class CodeMindConfig(PretrainedConfig):
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
+        
+        # GQA support
+        if num_key_value_heads is None:
+            num_key_value_heads = num_attention_heads
+        self.num_key_value_heads = num_key_value_heads
+        
         self.intermediate_size = intermediate_size
         self.max_position_embeddings = max_position_embeddings
         self.rms_norm_eps = rms_norm_eps
@@ -60,10 +68,16 @@ class CodeMindConfig(PretrainedConfig):
         self.attention_dropout = attention_dropout
         self.activation = activation
         self.rotary_pct = rotary_pct
+        self.rope_scaling = rope_scaling
         self.use_cache = use_cache
         self.head_dim = self.hidden_size // self.num_attention_heads
         self.output_attentions = output_attentions
         self.output_hidden_states = output_hidden_states
+        self.output_router_logits = kwargs.get("output_router_logits", False)
+        
+        # MoE Support
+        self.num_experts = kwargs.get("num_experts", 1)
+        self.num_experts_per_tok = kwargs.get("num_experts_per_tok", 1)
         
         super().__init__(
             tie_word_embeddings=tie_word_embeddings, 
@@ -80,6 +94,7 @@ class CodeMindConfig(PretrainedConfig):
             "hidden_size": self.hidden_size,
             "num_hidden_layers": self.num_hidden_layers,
             "num_attention_heads": self.num_attention_heads,
+            "num_key_value_heads": self.num_key_value_heads,
             "intermediate_size": self.intermediate_size,
             "max_position_embeddings": self.max_position_embeddings,
             "rms_norm_eps": self.rms_norm_eps,
@@ -87,7 +102,10 @@ class CodeMindConfig(PretrainedConfig):
             "attention_dropout": self.attention_dropout,
             "activation": self.activation,
             "rotary_pct": self.rotary_pct,
+            "rope_scaling": self.rope_scaling,
             "use_cache": self.use_cache,
+            "num_experts": self.num_experts,
+            "num_experts_per_tok": self.num_experts_per_tok,
         }
         output.update(specifics)
         return output
@@ -111,16 +129,20 @@ class RMSNorm(nn.Module):
 
 class RotaryEmbedding(nn.Module):
     def __init__(
-        self, dim: int, max_position_embeddings: int = 2048, base: float = 10000.0
+        self, 
+        dim: int, 
+        max_position_embeddings: int = 2048, 
+        base: float = 10000.0,
+        scaling_factor: float = 1.0,
     ):
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        self.scaling_factor = scaling_factor
 
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-
         self._set_cos_sin_cache(max_position_embeddings)
 
     def _set_cos_sin_cache(self, seq_len: int):
@@ -128,6 +150,8 @@ class RotaryEmbedding(nn.Module):
         t = torch.arange(
             self.max_position_embeddings, device=self.inv_freq.device, dtype=self.inv_freq.dtype
         )
+        t = t / self.scaling_factor
+        
         freqs = torch.outer(t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer("cos_cached", emb.cos(), persistent=False)
@@ -179,26 +203,48 @@ def apply_rotary_pos_emb(
         
     return q_embed, k_embed
 
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
 
 class CodeMindAttention(nn.Module):
     def __init__(self, config: CodeMindConfig):
         super().__init__()
         self.config = config
+        self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = config.head_dim
-        self.hidden_size = config.hidden_size
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
-        self.query_key_value = nn.Linear(
-            config.hidden_size, 3 * config.hidden_size, bias=False
-        )
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        self.dense.SCALE_INIT = True
+        # Separate projections for GQA
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+        
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+        self.o_proj.SCALE_INIT = True
 
-        self.attention_dropout = nn.Dropout(config.attention_dropout)
+        self.attention_dropout = config.attention_dropout
+        self.is_causal = True
 
-        rotary_dim = int(config.head_dim * config.rotary_pct)
+        rotary_dim = int(self.head_dim * config.rotary_pct)
+        scaling_factor = 1.0
+        if config.rope_scaling is not None and config.rope_scaling.get("type", "") == "linear":
+            scaling_factor = config.rope_scaling.get("factor", 1.0)
+            
         self.rotary_emb = RotaryEmbedding(
-            rotary_dim, max_position_embeddings=config.max_position_embeddings
+            rotary_dim, 
+            max_position_embeddings=config.max_position_embeddings,
+            scaling_factor=scaling_factor
         )
 
     def forward(
@@ -214,10 +260,13 @@ class CodeMindAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor]]:
         batch_size, seq_len, _ = hidden_states.shape
 
-        qkv = self.query_key_value(hidden_states)
-        qkv = qkv.view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        query, key, value = qkv[0], qkv[1], qkv[2]
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, seq_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, seq_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
         seq_len_offset = 0
         if past_key_value is not None:
@@ -226,40 +275,45 @@ class CodeMindAttention(nn.Module):
             elif isinstance(past_key_value, tuple) and len(past_key_value) > 0:
                 seq_len_offset = past_key_value[0].shape[-2]
 
-        cos, sin = self.rotary_emb(value, seq_len, seq_len_offset=seq_len_offset, position_ids=position_ids)
-        query, key = apply_rotary_pos_emb(query, key, cos, sin)
+        cos, sin = self.rotary_emb(value_states, seq_len, seq_len_offset=seq_len_offset, position_ids=position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
             if isinstance(past_key_value, Cache):
-                key, value = past_key_value.update(key, value, layer_idx)
+                key_states, value_states = past_key_value.update(key_states, value_states, layer_idx)
             else:
                 past_key, past_value = past_key_value
-                key = torch.cat([past_key, key], dim=2)
-                value = torch.cat([past_value, value], dim=2)
+                key_states = torch.cat([past_key, key_states], dim=2)
+                value_states = torch.cat([past_value, value_states], dim=2)
 
-        present_key_value = (key, value) if use_cache and not isinstance(past_key_value, Cache) else None
+        present_key_value = (key_states, value_states) if use_cache and not isinstance(past_key_value, Cache) else None
+        
+        # repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
         
         if output_attentions:
-            attn_weights = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query_states, key_states.transpose(-1, -2)) / math.sqrt(self.head_dim)
             if attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
             attn_weights = F.softmax(attn_weights, dim=-1)
-            attn_output = torch.matmul(self.attention_dropout(attn_weights), value)
+            # Use dropout for manual attention implementation
+            attn_output = torch.matmul(F.dropout(attn_weights, p=self.attention_dropout, training=self.training), value_states)
         else:
             attn_weights = None
             attn_output = F.scaled_dot_product_attention(
-                query,
-                key,
-                value,
+                query_states,
+                key_states,
+                value_states,
                 attn_mask=attention_mask,
-                dropout_p=self.config.attention_dropout if self.training else 0.0,
-                is_causal=False
+                dropout_p=self.attention_dropout if self.training else 0.0,
+                is_causal=False  # Causal masking forms part of the explicit attention_mask
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.view(batch_size, seq_len, self.hidden_size)
+        attn_output = attn_output.view(batch_size, seq_len, self.num_heads * self.head_dim)
 
-        attn_output = self.dense(attn_output)
+        attn_output = self.o_proj(attn_output)
 
         return attn_output, present_key_value, attn_weights
 
@@ -278,6 +332,61 @@ class CodeMindMLP(nn.Module):
         return self.down_proj(F.silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
 
 
+class CodeMindMoE(nn.Module):
+    """Mixture of Experts replacing standard MLP if num_experts > 1"""
+    
+    def __init__(self, config: CodeMindConfig):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.num_experts = config.num_experts
+        self.top_k = config.num_experts_per_tok
+
+        # gating
+        self.gate = nn.Linear(self.hidden_size, self.num_experts, bias=False)
+        self.experts = nn.ModuleList([CodeMindMLP(config) for _ in range(self.num_experts)])
+
+    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        
+        # router_logits: (batch * sequence_length, n_experts)
+        router_logits = self.gate(hidden_states)
+        
+        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        # we cast back to the input dtype
+        routing_weights = routing_weights.to(hidden_states.dtype)
+        
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+        )
+        
+        # Expert routing mechanism
+        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            expert_layer = self.experts[expert_idx]
+            idx, top_x = torch.where(expert_mask[expert_idx])
+
+            if top_x.shape[0] == 0:
+                continue
+
+            # Indexing the states and feeding them through the expert
+            top_x_list = top_x.tolist()
+            idx_list = idx.tolist()
+
+            current_state = hidden_states[None, top_x_list].reshape(-1, hidden_dim)
+            current_hidden_states = expert_layer(current_state) * routing_weights[top_x_list, idx_list, None]
+
+            # Add output to final tensor
+            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        return final_hidden_states, router_logits
+
+
 class CodeMindLayer(nn.Module):
     def __init__(self, config: CodeMindConfig, layer_idx: int):
         super().__init__()
@@ -285,7 +394,11 @@ class CodeMindLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.attention = CodeMindAttention(config)
-        self.mlp = CodeMindMLP(config)
+        
+        if config.num_experts > 1:
+            self.mlp = CodeMindMoE(config)
+        else:
+            self.mlp = CodeMindMLP(config)
         
         self.dropout = nn.Dropout(config.hidden_dropout)
 
@@ -299,7 +412,8 @@ class CodeMindLayer(nn.Module):
         use_cache: bool = False,
         position_ids: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor]]:
+        output_router_logits: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor], Optional[torch.Tensor]]:
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -310,10 +424,16 @@ class CodeMindLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        mlp_output = self.mlp(hidden_states)
+        
+        if isinstance(self.mlp, CodeMindMoE):
+            mlp_output, router_logits = self.mlp(hidden_states)
+        else:
+            mlp_output = self.mlp(hidden_states)
+            router_logits = None
+            
         hidden_states = residual + self.dropout(mlp_output)
 
-        return hidden_states, present_key_value, attn_weights
+        return hidden_states, present_key_value, attn_weights, router_logits
 
 
 class CodeMindModel(nn.Module):
@@ -428,11 +548,13 @@ class CodeMindModel(nn.Module):
         use_cache: bool = False,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         **kwargs
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_router_logits = output_router_logits if output_router_logits is not None else getattr(self.config, "output_router_logits", False)
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
@@ -468,6 +590,7 @@ class CodeMindModel(nn.Module):
 
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
+        all_router_logits = () if output_router_logits else None
 
         for i, layer in enumerate(self.layers):
             if output_hidden_states:
@@ -494,11 +617,12 @@ class CodeMindModel(nn.Module):
                     use_cache,
                     position_ids,
                     output_attentions,
+                    output_router_logits,
                     use_reentrant=False
                 )
             else:
                 layer_outputs = layer(
-                    hidden_states, extended_attention_mask, past_key_value, use_cache, position_ids, output_attentions=output_attentions
+                    hidden_states, extended_attention_mask, past_key_value, use_cache, position_ids, output_attentions=output_attentions, output_router_logits=output_router_logits
                 )
 
             hidden_states = layer_outputs[0]
@@ -507,20 +631,27 @@ class CodeMindModel(nn.Module):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[2],)
+                
+            if output_router_logits and layer_outputs[3] is not None:
+                all_router_logits += (layer_outputs[3],)
 
         hidden_states = self.final_layernorm(hidden_states)
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, present_key_values, all_hidden_states, all_self_attns] if v is not None)
+            res = tuple(v for v in [hidden_states, present_key_values, all_hidden_states, all_self_attns, all_router_logits] if v is not None)
+            return res
 
-        return BaseModelOutputWithPast(
+        output = BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=present_key_values,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
+        if output_router_logits:
+            output.router_logits = all_router_logits
+        return output
 
 
 class CodeMindForCausalLM(PreTrainedModel, GenerationMixin):
@@ -547,10 +678,12 @@ class CodeMindForCausalLM(PreTrainedModel, GenerationMixin):
         use_cache: bool = False,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         **kwargs
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_router_logits = output_router_logits if output_router_logits is not None else getattr(self.config, "output_router_logits", False)
 
         outputs = self.model(
             input_ids=input_ids,
@@ -561,6 +694,7 @@ class CodeMindForCausalLM(PreTrainedModel, GenerationMixin):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_router_logits=output_router_logits,
             return_dict=return_dict,
             **kwargs
         )
@@ -578,17 +712,43 @@ class CodeMindForCausalLM(PreTrainedModel, GenerationMixin):
                 shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1)
             )
 
+        # Basic Aux loss logic for MoE load balancing
+        aux_loss = None
+        if output_router_logits and hasattr(outputs, "router_logits") and outputs.router_logits is not None:
+            # We compute aux loss to balance the load among experts
+            router_logits = outputs.router_logits
+            concat_logits = torch.cat([logit for logit in router_logits], dim=0)
+            
+            # Simple balancing: encourage equal routing probability
+            routing_weights = F.softmax(concat_logits, dim=-1)
+            # density per expert
+            density_1_proxy = routing_weights.mean(dim=0)
+            # fraction of tokens dispatched to each expert
+            _, selected_experts = torch.topk(routing_weights, self.config.num_experts_per_tok, dim=-1)
+            expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.config.num_experts)
+            density_1 = expert_mask.float().mean(dim=(0, 1))
+            
+            aux_loss = (density_1_proxy * density_1).sum() * self.config.num_experts
+            
+            if loss is not None:
+                loss += 0.01 * aux_loss # 0.01 is router aux loss coef
+
         if not return_dict:
             output = (logits,) + outputs[1:]
+            if aux_loss is not None:
+                output = output + (aux_loss,)
             return ((loss,) + output) if loss is not None else output
 
-        return CausalLMOutputWithPast(
+        output = CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+        if output_router_logits:
+            output.router_logits = outputs.router_logits
+        return output
 
     @property
     def supports_gradient_checkpointing(self):
