@@ -27,7 +27,8 @@ data/chroma/
 *.sqlite3
 
 # Model Artifacts
-codemind/checkpoints/
+codemind/checkpoints/*
+!codemind/checkpoints/tokenizer/
 codemind/checkpoints_instruct/
 models/fine_tuned/
 models/CodeMind-*/
