@@ -1,0 +1,82 @@
+[
+  {
+    "user": "Python'da bir fonksiyon nasıl yazılır?",
+    "assistant": "def fonksiyon_adi(parametre):\n    return parametre * 2",
+    "pattern": "function_definition",
+    "language": "python",
+    "category": "function",
+    "difficulty": 0.2
+  },
+  {
+    "user": "Bir listeyi ters çeviren fonksiyon yaz",
+    "assistant": "def ters_cevir(liste):\n    return liste[::-1]",
+    "pattern": "list_operations",
+    "language": "python",
+    "category": "function",
+    "difficulty": 0.3
+  },
+  {
+    "user": "Flutter'da bir StatelessWidget nasıl oluşturulur?",
+    "assistant": "class MyWidget extends StatelessWidget {\n  @override\n  Widget build(BuildContext context) {\n    return Container(child: Text('Hello'));\n  }\n}",
+    "pattern": "stateless_widget",
+    "language": "dart",
+    "category": "class",
+    "difficulty": 0.4
+  },
+  {
+    "user": "JavaScript'te async fonksiyon nasıl yazılır?",
+    "assistant": "async function fetchData() {\n  const response = await fetch('/api/data');\n  return response.json();\n}",
+    "pattern": "async_function",
+    "language": "javascript",
+    "category": "function",
+    "difficulty": 0.5
+  },
+  {
+    "user": "Python'da bir sınıf nasıl tanımlanır?",
+    "assistant": "class Araba:\n    def __init__(self, marka):\n        self.marka = marka\n    \n    def calistir(self):\n        print(f'{self.marka} calisti')",
+    "pattern": "class_definition",
+    "language": "python",
+    "category": "class",
+    "difficulty": 0.4
+  },
+  {
+    "user": "Flutter'da StatefulWidget nasıl kullanılır?",
+    "assistant": "class Counter extends StatefulWidget {\n  @override\n  _CounterState createState() => _CounterState();\n}\n\nclass _CounterState extends State<Counter> {\n  int count = 0;\n  @override\n  Widget build(BuildContext context) {\n    return Text('$count');\n  }\n}",
+    "pattern": "stateful_widget",
+    "language": "dart",
+    "category": "class",
+    "difficulty": 0.6
+  },
+  {
+    "user": "Python'da try-except bloğu nasıl kullanılır?",
+    "assistant": "try:\n    result = 10 / 0\nexcept ZeroDivisionError:\n    print('Sifira bolunemez')\nfinally:\n    print('Islem tamamlandi')",
+    "pattern": "error_handling",
+    "language": "python",
+    "category": "pattern",
+    "difficulty": 0.4
+  },
+  {
+    "user": "JavaScript'te Promise nasıl oluşturulur?",
+    "assistant": "const myPromise = new Promise((resolve, reject) => {\n  if (success) {\n    resolve('Basarili');\n  } else {\n    reject('Hata');\n  }\n});",
+    "pattern": "promise",
+    "language": "javascript",
+    "category": "pattern",
+    "difficulty": 0.5
+  },
+  {
+    "user": "Flutter'da navigation nasıl yapılır?",
+    "assistant": "Navigator.push(\n  context,\n  MaterialPageRoute(builder: (context) => SecondPage()),\n);",
+    "pattern": "navigation",
+    "language": "dart",
+    "category": "pattern",
+    "difficulty": 0.4
+  },
+  {
+    "user": "Python'da decorator nasıl yazılır?",
+    "assistant": "def my_decorator(func):\n    def wrapper(*args, **kwargs):\n        print('Once')\n        result = func(*args, **kwargs)\n        print('Sonra')\n        return result\n    return wrapper",
+    "pattern": "decorator",
+    "language": "python",
+    "category": "pattern",
+    "difficulty": 0.7
+  }
+]

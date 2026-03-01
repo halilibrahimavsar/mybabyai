@@ -27,21 +27,34 @@ data/chroma/
 *.sqlite3
 
 # Model Artifacts
-codemind/checkpoints/*
-!codemind/checkpoints/tokenizer/
-codemind/checkpoints_instruct/
+# Global ignores for large weight files
+*.pt
+*.bin
+*.safetensors
+*.model
+*.ckpt
+
+# Keep model structure but ignore heavy weights
+!codemind/
+!codemind/**
+codemind/**/*.pt
+codemind/**/*.bin
+codemind/**/*.safetensors
+
+# Ensure all tokenizer and configuration files are tracked
+!**/tokenizer/
+!**/tokenizer/**
+!config.json
+!tokenizer_config.json
+!vocab.json
+!tokenizer.json
+!special_tokens_map.json
+!generation_config.json
+
+# Other potential model folders
 models/fine_tuned/
 models/CodeMind-*/
 checkpoint-*/
-*.safetensors
-*.pt
-*.bin
-*.model
-*.json
-!config.json
-!tokenizer_config.json
-!special_tokens_map.json
-!generation_config.json
 
 # IDEs
 .vscode/
