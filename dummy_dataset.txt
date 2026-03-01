@@ -1,0 +1,5 @@
+This is a dummy text file to test the CodeMind model training process.
+It contains some text so the tokenizer has something to process.
+Code is also tested:
+def hello_world():
+    print("Hello, world!")

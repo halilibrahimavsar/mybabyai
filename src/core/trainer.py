@@ -461,7 +461,12 @@ class LoRATrainer:
                 checkpoint_dir = self.config.get_path("codemind.checkpoint_dir", "codemind/checkpoints")
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
                 
-                state_dict = self.model_manager.model.state_dict()
+                if hasattr(self.model_manager.model, "base_model"):
+                    raw_state_dict = self.model_manager.model.base_model.model.state_dict()
+                else:
+                    raw_state_dict = self.model_manager.model.state_dict()
+                
+                state_dict = {k: v for k, v in raw_state_dict.items() if "lora_" not in k and "modules_to_save" not in k}
                 checkpoint = {"model_state_dict": state_dict}
                 
                 config_dict = getattr(self.model_manager.model, "config", None)

@@ -105,8 +105,10 @@ class SettingsWidget(QWidget):
         model_group.setStyleSheet(self._group_style())
         model_layout = QFormLayout(model_group)
 
-        self.model_label = QLabel("CodeMind-125M (Local)")
-        model_layout.addRow("Varsayılan Model:", self.model_label)
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self._refresh_model_list()
+        model_layout.addRow("Seçili Model:", self.model_combo)
 
         self.device_combo = QComboBox()
         self.device_combo.addItems(["auto", "cuda", "mps", "cpu"])
@@ -150,10 +152,15 @@ class SettingsWidget(QWidget):
         self.model_info_label.setWordWrap(True)
         info_layout.addWidget(self.model_info_label)
 
-        load_model_btn = QPushButton("Model Yükle")
+        load_model_btn = QPushButton("Kayıtlı Modeli Yükle")
         load_model_btn.clicked.connect(self._load_model)
         load_model_btn.setStyleSheet(self._button_style())
         info_layout.addWidget(load_model_btn)
+
+        new_model_btn = QPushButton("Sıfır CodeMind Modeli Oluştur / Yükle")
+        new_model_btn.clicked.connect(self._load_fresh_model)
+        new_model_btn.setStyleSheet(self._button_style("#10b981")) # emerald
+        info_layout.addWidget(new_model_btn)
 
         unload_model_btn = QPushButton("Model Kaldır")
         unload_model_btn.clicked.connect(self._unload_model)
@@ -320,6 +327,30 @@ class SettingsWidget(QWidget):
         layout.addStretch()
         return widget
 
+    def _refresh_model_list(self) -> None:
+        self.model_combo.clear()
+        
+        # Add basic aliases
+        self.model_combo.addItems([
+            "CodeMind-125M",
+            "microsoft/phi-1_5",
+            "microsoft/phi-2"
+        ])
+
+        # Scan for local checkpoints in codemind directory
+        base_dir = Path(self.config.base_dir)
+        codemind_dir = base_dir / "codemind"
+        
+        checkpoints_dirs = ["checkpoints", "checkpoints_instruct"]
+        
+        for d in checkpoints_dirs:
+            p = codemind_dir / d
+            if p.exists():
+                for checkpoint in p.glob("*.pt"):
+                    # Use relative path for cleaner UI
+                    rel_path = checkpoint.relative_to(base_dir)
+                    self.model_combo.addItem(str(rel_path))
+
     def _group_style(self) -> str:
         return """
             QGroupBox {
@@ -359,7 +390,9 @@ class SettingsWidget(QWidget):
         self._update_memory_stats()
 
     def _load_settings(self) -> None:
-        pass # Default model always CodeMind
+        default_model = self.config.get("model.name", "CodeMind-125M")
+        self.model_combo.setEditText(default_model)
+        
         self.device_combo.setCurrentText(self.config.get("model.device", "auto"))
         self.quantize_check.setChecked(self.config.get("model.load_in_4bit", True))
         self.max_memory_edit.setText(self.config.get("model.max_memory", "8GB"))
@@ -383,7 +416,9 @@ class SettingsWidget(QWidget):
         self.max_history_spin.setValue(self.config.get("memory.max_history", 100))
 
     def _save_settings(self) -> None:
-        self.config.set("model.default_model", "CodeMind-125M")
+        selected_model = self.model_combo.currentText()
+        self.config.set("model.name", selected_model)
+        self.config.set("model.default_model", selected_model)
         self.config.set("model.device", self.device_combo.currentText())
         self.config.set("model.load_in_4bit", self.quantize_check.isChecked())
         self.config.set("model.max_memory", self.max_memory_edit.text())
@@ -408,8 +443,31 @@ class SettingsWidget(QWidget):
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi!")
 
     def _load_model(self) -> None:
-        self.main_window.load_model("CodeMind-125M")
+        selected_model = self.model_combo.currentText()
+        self.main_window.load_model(selected_model)
         self._update_model_info()
+
+    def _load_fresh_model(self) -> None:
+        if not self.main_window.model_manager:
+            from src.core.model_manager import ModelManager
+            self.main_window.model_manager = ModelManager(self.config)
+            self.model_manager = self.main_window.model_manager
+
+        try:
+            self.main_window.status_bar.showMessage("Sıfır model oluşturuluyor...")
+            self.main_window._set_model_status("Model: Oluşturuluyor...", "#fde68a")
+            # Creating a fresh model is very fast (init random tensors), so we run it sync
+            self.model_manager.load_fresh_model()
+            self.main_window._on_model_loaded()
+            self._update_model_info()
+            QMessageBox.information(
+                self,
+                "Başarılı",
+                "Sıfır CodeMind modeli başarıyla oluşturuldu ve yüklendi.\nModeli 'Eğitim' sekmesinde eğitebilirsiniz."
+            )
+        except Exception as e:
+            self.logger.error(f"Sıfır model oluşturma hatası: {e}")
+            self.main_window._on_model_load_error(str(e))
 
     def _unload_model(self) -> None:
         self.main_window.unload_model()

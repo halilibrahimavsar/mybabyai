@@ -45,6 +45,8 @@ class CodeMindConfig(PretrainedConfig):
         rotary_pct: float = 1.0,
         use_cache: bool = True,
         tie_word_embeddings: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
         **kwargs
     ):
         self.vocab_size = vocab_size
@@ -60,7 +62,35 @@ class CodeMindConfig(PretrainedConfig):
         self.rotary_pct = rotary_pct
         self.use_cache = use_cache
         self.head_dim = self.hidden_size // self.num_attention_heads
-        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+        self.output_attentions = output_attentions
+        self.output_hidden_states = output_hidden_states
+        
+        super().__init__(
+            tie_word_embeddings=tie_word_embeddings, 
+            output_attentions=output_attentions, 
+            output_hidden_states=output_hidden_states, 
+            **kwargs
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Custom to_dict to ensure all specific fields are saved in checkpoint metadata."""
+        output = super().to_dict()
+        specifics = {
+            "vocab_size": self.vocab_size,
+            "hidden_size": self.hidden_size,
+            "num_hidden_layers": self.num_hidden_layers,
+            "num_attention_heads": self.num_attention_heads,
+            "intermediate_size": self.intermediate_size,
+            "max_position_embeddings": self.max_position_embeddings,
+            "rms_norm_eps": self.rms_norm_eps,
+            "hidden_dropout": self.hidden_dropout,
+            "attention_dropout": self.attention_dropout,
+            "activation": self.activation,
+            "rotary_pct": self.rotary_pct,
+            "use_cache": self.use_cache,
+        }
+        output.update(specifics)
+        return output
 
 
 class RMSNorm(nn.Module):

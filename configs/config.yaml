@@ -28,7 +28,7 @@ model:
     - checkpoints
     - checkpoints_instruct
     min_compatibility_ratio: 0.6
-  default_model: CodeMind-125M
+  default_model: codemind/checkpoints_instruct/model_best.pt
   device: auto
   load_in_4bit: true
   lora:
@@ -42,6 +42,7 @@ model:
     - o_proj
   max_memory: 10GB
   model_path: models/
+  name: codemind/checkpoints_instruct/model_best.pt
 training:
   gradient_accumulation_steps: 1
   gradient_checkpointing: auto

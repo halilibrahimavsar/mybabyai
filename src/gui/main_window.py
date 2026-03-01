@@ -38,14 +38,15 @@ class ModelLoadThread(QThread):
     success = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, model_manager: ModelManager, config: Config):
+    def __init__(self, model_manager: ModelManager, config: Config, model_name: Optional[str] = None):
         super().__init__()
         self.model_manager = model_manager
         self.config = config
+        self.model_name = model_name
 
     def run(self) -> None:
         try:
-            self.model_manager.load_model("CodeMind-125M")
+            self.model_manager.load_model(self.model_name)
             self.success.emit()
         except Exception as e:
             self.error.emit(str(e))
@@ -277,7 +278,9 @@ class MainWindow(QMainWindow):
             if self.model_manager is None:
                 self.model_manager = ModelManager(self.config)
 
-            self._model_load_thread = ModelLoadThread(self.model_manager, self.config)
+            self._model_load_thread = ModelLoadThread(
+                self.model_manager, self.config, model_name
+            )
             self._model_load_thread.success.connect(self._on_model_loaded)
             self._model_load_thread.error.connect(self._on_model_load_error)
             self._model_load_thread.start()
@@ -314,10 +317,16 @@ class MainWindow(QMainWindow):
         self.logger.error(f"Model yükleme hatası: {error_msg}")
         self._set_model_status("Model: Hata", "#fca5a5")
         self.status_bar.showMessage(f"Hata: {error_msg}")
+        
+        if "FileNotFoundError" in error_msg or "bulunamadı" in error_msg.lower():
+            suggest_msg = "Model dosyası bulunamadı. Ayarlar sekmesindeki 'Sıfır CodeMind Modeli Oluştur' butonunu kullanarak taze bir model yaratabilirsiniz."
+        else:
+            suggest_msg = "Model yüklenemedi. Eğitim detaylarınızı veya checkpoint uygunluğunu kontrol edin."
+            
         QMessageBox.warning(
             self,
             "Model Yükleme Uyarısı",
-            f"Model yüklenemedi. Eğitim sekmesini kullanarak model oluşturabilirsiniz.\n\nHata: {error_msg}",
+            f"{suggest_msg}\n\nHata: {error_msg}",
         )
 
     def unload_model(self) -> None:

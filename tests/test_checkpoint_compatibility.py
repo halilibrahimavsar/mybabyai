@@ -10,7 +10,7 @@ from src.utils.config import Config
 
 
 class CheckpointCompatibilityTests(unittest.TestCase):
-    def test_incompatible_checkpoint_fails_fast(self):
+    def test_incompatible_checkpoint_loads_partial_instead_of_crashing(self):
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint_dir = Path(tmp)
             tokenizer_dir = checkpoint_dir / "tokenizer"
@@ -35,10 +35,37 @@ class CheckpointCompatibilityTests(unittest.TestCase):
             adapter._checkpoint_dirs = [checkpoint_dir]
             adapter._compatibility_threshold = 0.80
 
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.load_model()
+            # It should load successfully, logging a warning, but NOT raising RuntimeError
+            model, tok, report = adapter.load_model()
+            
+            self.assertFalse(report.is_compatible)
+            self.assertEqual(report.compatibility_ratio, 0.0)
 
-            self.assertIn("compatibility below threshold", str(ctx.exception).lower())
+    def test_deprecated_keys_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_dir = Path(tmp)
+            tokenizer_dir = checkpoint_dir / "tokenizer"
+            tokenizer = CodeTokenizer(vocab_size=128)
+            tokenizer.save(str(tokenizer_dir))
+
+            checkpoint = {
+                "model_state_dict": {
+                    "model.position_embeddings.weight": torch.randn(2, 2),
+                    "input_layernorm.bias": torch.randn(2),
+                    "valid_key": torch.randn(2)
+                },
+                "config": {
+                    "vocab_size": 128,
+                },
+            }
+            torch.save(checkpoint, checkpoint_dir / "model.pt")
+
+            adapter = CodeMindAdapter(Config())
+            adapter._checkpoint_dirs = [checkpoint_dir]
+            
+            model, tok, report = adapter.load_model()
+            
+            self.assertEqual(report.deprecated_keys_found, 2)
 
 
 if __name__ == "__main__":

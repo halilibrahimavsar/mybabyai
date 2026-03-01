@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 import hashlib
 from typing import Any, Dict, Iterable, Optional
 
+DEPRECATED_KEY_PATTERNS = [
+    "model.position_embeddings.weight",  # Old absolute position embeddings
+    "input_layernorm.bias",              # Old LayerNorm bias (RMSNorm has no bias)
+    "post_attention_layernorm.bias",     # Old LayerNorm bias
+]
 
 @dataclass
 class CheckpointMetadata:

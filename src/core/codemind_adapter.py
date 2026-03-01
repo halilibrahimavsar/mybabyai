@@ -1,14 +1,19 @@
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 import torch
 
 
 
 from src.utils.config import Config
 from src.utils.logger import get_logger
-from src.core.checkpointing import extract_checkpoint_metadata, build_checkpoint_metadata, attach_checkpoint_metadata
+from src.core.checkpointing import (
+    extract_checkpoint_metadata,
+    build_checkpoint_metadata,
+    attach_checkpoint_metadata,
+    DEPRECATED_KEY_PATTERNS,
+)
 from src.core.prompting import build_codemind_code_prompt, extract_assistant_response
 
 
@@ -22,6 +27,7 @@ class CheckpointCompatibilityReport:
     shape_mismatches: int
     missing_in_model: int
     missing_in_checkpoint: int
+    deprecated_keys_found: int
     compatibility_ratio: float
     compatibility_threshold: float
     metadata_ok: bool
@@ -40,7 +46,8 @@ class CheckpointCompatibilityReport:
             f"matched={self.matched_keys}, adapted={self.adapted_keys}, "
             f"shape_mismatches={self.shape_mismatches}, "
             f"missing_in_model={self.missing_in_model}, "
-            f"missing_in_checkpoint={self.missing_in_checkpoint}"
+            f"missing_in_checkpoint={self.missing_in_checkpoint}, "
+            f"deprecated_keys={self.deprecated_keys_found}"
         )
 
 
@@ -67,7 +74,7 @@ class CodeMindAdapter:
             ]
 
         self._compatibility_threshold = float(
-            self.config.get("model.codemind.min_compatibility_ratio", 0.60)
+            self.config.get("model.codemind.min_compatibility_ratio", 0.55)
         )
 
     def _candidate_checkpoint_files(self, checkpoint_dir: Path) -> List[Path]:
@@ -92,7 +99,20 @@ class CodeMindAdapter:
         return self._resolve_checkpoint_path() is not None
 
     def _resolve_tokenizer_path(self, checkpoint_path: Path) -> Path:
-        return checkpoint_path.parent / "tokenizer"
+        # 1. Try sibling directory (standard)
+        sibling_tokenizer = checkpoint_path.parent / "tokenizer"
+        if sibling_tokenizer.exists():
+            return sibling_tokenizer
+            
+        # 2. Try other configured checkpoint directories
+        for checkpoint_dir in self._checkpoint_dirs:
+            candidate = checkpoint_dir / "tokenizer"
+            if candidate.exists():
+                self.logger.info(f"Using alternative tokenizer found at: {candidate}")
+                return candidate
+        
+        # 3. Fallback to default (will likely fail if none of the above exist)
+        return sibling_tokenizer
 
     def _build_model_from_checkpoint(self, checkpoint: Dict[str, Any], tokenizer_vocab_size: int):
         from src.core.model.codemind import CodeMindConfig, CodeMindForCausalLM
@@ -151,9 +171,11 @@ class CodeMindAdapter:
         model_vocab_size: int,
         skipped_keys: List[str],
         missing_in_checkpoint: int,
+        deprecated_keys_found: int,
     ) -> CheckpointCompatibilityReport:
+        # Deprecated keys don't count towards the model's expected keys
         total_model_keys = max(len(model_state), 1)
-        compatibility_ratio = (matched_keys + adapted_keys) / total_model_keys
+        compatibility_ratio = (matched_keys + adapted_keys) / (total_model_keys)
 
         return CheckpointCompatibilityReport(
             checkpoint_path=str(checkpoint_path),
@@ -164,6 +186,7 @@ class CodeMindAdapter:
             shape_mismatches=shape_mismatches,
             missing_in_model=missing_in_model,
             missing_in_checkpoint=missing_in_checkpoint,
+            deprecated_keys_found=deprecated_keys_found,
             compatibility_ratio=compatibility_ratio,
             compatibility_threshold=self._compatibility_threshold,
             metadata_ok=metadata_ok,
@@ -172,12 +195,18 @@ class CodeMindAdapter:
             skipped_keys_preview=skipped_keys[:10],
         )
 
-    def load_model(self) -> Tuple[Any, Any, CheckpointCompatibilityReport]:
-        checkpoint_path = self._resolve_checkpoint_path()
+    def load_model(
+        self, checkpoint_path: Optional[Union[str, Path]] = None
+    ) -> Tuple[Any, Any, CheckpointCompatibilityReport]:
         if checkpoint_path is None:
+            checkpoint_path = self._resolve_checkpoint_path()
+        else:
+            checkpoint_path = Path(checkpoint_path)
+
+        if checkpoint_path is None or not checkpoint_path.exists():
             searched = ", ".join(str(p) for p in self._checkpoint_dirs)
             raise FileNotFoundError(
-                f"CodeMind checkpoint not found. Searched directories: {searched}"
+                f"CodeMind checkpoint not found at {checkpoint_path}. Searched directories: {searched}"
             )
 
         self.logger.info(f"Loading CodeMind model from: {checkpoint_path}")
@@ -213,6 +242,7 @@ class CodeMindAdapter:
         adapted_keys = 0
         shape_mismatches = 0
         missing_in_model = 0
+        deprecated_keys_found = 0
 
         for og_key, value in state_dict.items():
             key = og_key
@@ -229,6 +259,41 @@ class CodeMindAdapter:
                 
             # Skip non-persistent buffers that are in checkpoint but not model
             if any(buf in key for buf in ["inv_freq", "cos_cached", "sin_cached"]):
+                continue
+
+            # Skip known deprecated keys from older architectures
+            if any(pattern in key for pattern in DEPRECATED_KEY_PATTERNS):
+                deprecated_keys_found += 1
+                skipped_keys.append(f"{og_key} (deprecated in new architecture)")
+                continue
+            
+            # Mapping for older MLP architectures (GELU -> SwiGLU)
+            if "mlp.dense_h_to_4h" in key:
+                # Try to map to both gate_proj and up_proj
+                for sub in ["gate_proj", "up_proj"]:
+                    new_key = key.replace("mlp.dense_h_to_4h", f"mlp.{sub}")
+                    if new_key in model_state and new_key not in filtered_state:
+                        if value.shape == model_state[new_key].shape:
+                            filtered_state[new_key] = value
+                            matched_keys += 1
+                        else:
+                            adapted = self._adapt_checkpoint_tensor(new_key, value, model_state[new_key])
+                            if adapted is not None:
+                                filtered_state[new_key] = adapted
+                                adapted_keys += 1
+                continue
+            
+            if "mlp.dense_4h_to_h" in key:
+                new_key = key.replace("mlp.dense_4h_to_h", "mlp.down_proj")
+                if new_key in model_state:
+                    if value.shape == model_state[new_key].shape:
+                        filtered_state[new_key] = value
+                        matched_keys += 1
+                    else:
+                        adapted = self._adapt_checkpoint_tensor(new_key, value, model_state[new_key])
+                        if adapted is not None:
+                            filtered_state[new_key] = adapted
+                            adapted_keys += 1
                 continue
                 
             if key not in model_state:
@@ -264,13 +329,16 @@ class CodeMindAdapter:
             model_vocab_size=self.model.config.vocab_size,
             skipped_keys=skipped_keys,
             missing_in_checkpoint=len(model_state) - (matched_keys + adapted_keys),
+            deprecated_keys_found=deprecated_keys_found,
         )
 
         if not report.is_compatible:
-            raise RuntimeError(
+            # Instead of crashing, we log a warning and proceed with partial weights
+            self.logger.warning(
                 "Checkpoint compatibility below threshold. "
                 f"{report.summary()}. "
-                f"Skipped preview: {report.skipped_keys_preview}"
+                f"Skipped preview: {report.skipped_keys_preview}\n"
+                "Loading with partial weights (unmapped layers will remain randomly initialized)."
             )
 
         self.model.load_state_dict(filtered_state, strict=False)

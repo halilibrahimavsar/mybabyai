@@ -72,17 +72,22 @@ class ModelManager:
             bnb_4bit_use_double_quant=True,
         )
 
-    def _load_codemind(self) -> Tuple[Any, Any]:
+    def _load_codemind(self, checkpoint_path: Optional[str] = None) -> Tuple[Any, Any]:
         from src.core.codemind_adapter import CodeMindAdapter
 
         self.logger.info("CodeMind model yükleniyor...")
         self.is_codemind = True
 
         self.codemind_adapter = CodeMindAdapter(self.config)
-        self.model, self.tokenizer, _ = self.codemind_adapter.load_model()
-        self.model_name = "CodeMind-125M"
+        self.model, self.tokenizer, report = self.codemind_adapter.load_model(checkpoint_path)
+        
+        # If a path was provided, use the filename as model name
+        if checkpoint_path:
+            self.model_name = Path(checkpoint_path).name
+        else:
+            self.model_name = "CodeMind-125M"
 
-        self.logger.info("CodeMind model başarıyla yüklendi")
+        self.logger.info(f"CodeMind model başarıyla yüklendi: {self.model_name}")
         
         self._check_and_load_adapter()
         
@@ -95,6 +100,21 @@ class ModelManager:
         if adapter_config.exists():
             self.logger.info(f"Mevcut fine-tuning adapter tespit edildi: {adapter_dir}")
             try:
+                import json
+                with open(adapter_config, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                
+                # Check base_model_name_or_path if possible to prevent catastrophic mismatches
+                base_name = config_data.get("base_model_name_or_path", "").lower()
+                if self.is_codemind and base_name and "codemind" not in base_name and "model" not in base_name and not base_name.endswith(".pt"):
+                    self.logger.warning(f"Adapter ({base_name}) CodeMind modeli ile uyumlu görünmüyor. Yüklenmeyecek.")
+                    self.is_fine_tuned = False
+                    return
+                elif not self.is_codemind and base_name and "codemind" in base_name:
+                    self.logger.warning(f"Adapter (CodeMind) HF modeli ile uyumlu görünmüyor. Yüklenmeyecek.")
+                    self.is_fine_tuned = False
+                    return
+
                 self._load_lora_adapter(adapter_dir)
                 self.is_fine_tuned = True
             except Exception as e:
@@ -106,6 +126,10 @@ class ModelManager:
 
     def resolve_model_name(self, model_name: Optional[str] = None) -> str:
         if model_name:
+            # Check if it's a direct path to a .pt file
+            if model_name.endswith(".pt") and os.path.exists(model_name):
+                return model_name
+
             # Check if there is an alias match
             alias = model_name.lower()
             if alias in self._model_aliases:
@@ -128,8 +152,10 @@ class ModelManager:
     ) -> Tuple[Any, Any]:
         self.model_name = self.resolve_model_name(model_name)
         
-        if "codemind" in self.model_name.lower():
-            return self._load_codemind()
+        # Handle CodeMind specifically
+        if "codemind" in self.model_name.lower() or self.model_name.endswith(".pt"):
+            checkpoint_path = self.model_name if self.model_name.endswith(".pt") else None
+            return self._load_codemind(checkpoint_path)
         
         # Generic HuggingFace Model Loading
         self.logger.info(f"HuggingFace model yükleniyor: {self.model_name}...")
@@ -155,6 +181,44 @@ class ModelManager:
             self.is_fine_tuned = True
         
         self.logger.info(f"Model başarıyla yüklendi: {self.model_name}")
+        return self.model, self.tokenizer
+
+    def load_fresh_model(self) -> Tuple[Any, Any]:
+        """Loads a completely untrained CodeMind model from scratch."""
+        from src.core.codemind_adapter import CodeMindAdapter
+        from src.core.tokenizer.code_tokenizer import CodeTokenizer
+        from src.core.model.codemind import CodeMindConfig, CodeMindForCausalLM
+        
+        self.logger.info("Sıfırdan (eğitilmemiş) CodeMind model oluşturuluyor...")
+        self.is_codemind = True
+        self.model_name = "CodeMind-125M (Sıfır Model)"
+        self.is_fine_tuned = False
+        
+        self.codemind_adapter = CodeMindAdapter(self.config)
+        
+        # Resolve tokenizer exactly as standard load does
+        tokenizer_path = self.codemind_adapter._codemind_path / "tokenizer"
+        if not tokenizer_path.exists():
+            self.logger.warning(f"Tokenizer bulunamadı: {tokenizer_path}, varsayılan kullanılıyor.")
+            self.tokenizer = CodeTokenizer(vocab_size=32000)
+        else:
+            self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
+            
+        config = CodeMindConfig(
+            vocab_size=self.tokenizer.vocab_size_actual,
+            hidden_size=768,
+            num_hidden_layers=12,
+            num_attention_heads=12,
+            intermediate_size=768 * 4,
+            max_position_embeddings=2048
+        )
+        self.model = CodeMindForCausalLM(config)
+        self.model = self.model.to(self.device).eval()
+        
+        self.codemind_adapter.model = self.model
+        self.codemind_adapter.tokenizer = self.tokenizer
+        
+        self.logger.info("Sıfır model başarıyla oluşturuldu.")
         return self.model, self.tokenizer
 
     def _setup_lora(self) -> None:
