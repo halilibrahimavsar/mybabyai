@@ -1,0 +1,147 @@
+# CodeMind Configuration
+
+model:
+  name: "CodeMind-350M"
+  version: "1.0.0"
+  
+  architecture:
+    type: "gpt_neox"
+    hidden_size: 1024
+    num_hidden_layers: 24
+    num_attention_heads: 16
+    intermediate_size: 4096
+    max_position_embeddings: 2048
+    vocab_size: 16384
+    
+  dropout: 0.1
+  layer_norm_eps: 1.0e-5
+
+tokenizer:
+  type: "code_aware_bpe"
+  vocab_size: 16384
+  special_tokens:
+    - "<|python|>"
+    - "<|dart|>"
+    - "<|javascript|>"
+    - "<|code|>"
+    - "<|comment|>"
+    - "<|docstring|>"
+    - "<|function|>"
+    - "<|class|>"
+    - "<|error|>"
+    - "<|fix|>"
+    - "<|explain|>"
+    - "<|question|>"
+    - "<|answer|>"
+    - "<|pad|>"
+    - "<|eos|>"
+    - "<|unk|>"
+
+training:
+  # Pre-training
+  pretrain:
+    batch_size: 8
+    gradient_accumulation_steps: 8
+    learning_rate: 3.0e-4
+    weight_decay: 0.01
+    warmup_steps: 2000
+    max_steps: 100000
+    save_steps: 5000
+    eval_steps: 1000
+    
+  # Meta-learning (MAML)
+  meta_learning:
+    inner_lr: 1.0e-3
+    outer_lr: 1.0e-4
+    inner_steps: 5
+    meta_batch_size: 16
+    support_size: 5
+    query_size: 15
+    
+  # Fine-tuning (LoRA)
+  lora:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+  # Optimization
+  optimizer: "adamw_8bit"
+  scheduler: "cosine"
+  gradient_checkpointing: true
+  mixed_precision: "fp16"
+
+data:
+  sources:
+    - name: "python"
+      path: "data/python"
+      weight: 0.5
+    - name: "dart"
+      path: "data/dart"
+      weight: 0.25
+    - name: "javascript"
+      path: "data/javascript"
+      weight: 0.25
+  
+  augmentation:
+    enabled: true
+    techniques:
+      - "variable_rename"
+      - "comment_addition"
+      - "syntax_variation"
+  
+  curriculum:
+    enabled: true
+    stages:
+      - name: "basics"
+        difficulty: 0.2
+        examples: 100000
+      - name: "intermediate"
+        difficulty: 0.5
+        examples: 200000
+      - name: "advanced"
+        difficulty: 0.8
+        examples: 150000
+      - name: "expert"
+        difficulty: 1.0
+        examples: 50000
+
+active_learning:
+  enabled: true
+  curiosity_threshold: 0.3
+  max_questions_per_session: 5
+  difficulty_adaptation: true
+  
+  strategies:
+    - "uncertainty_sampling"
+    - "diversity_sampling"
+    - "error_based_sampling"
+
+memory:
+  type: "hybrid"
+  short_term:
+    max_tokens: 4096
+  long_term:
+    enabled: true
+    vector_db: "chromadb"
+    embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+    max_memories: 10000
+
+inference:
+  max_new_tokens: 1024
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 50
+  repetition_penalty: 1.1
+  
+hardware:
+  device: "auto"
+  max_memory_gb: 4
+  quantization: "4bit"

@@ -1,0 +1,53 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+bin/
+lib/
+lib64/
+include/
+pyvenv.cfg
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+logs/*.log
+*.log
+
+# Data Artifacts
+data/*.db
+data/mybabyai.db
+data/chroma/
+*.sqlite3
+
+# Model Artifacts
+codemind/checkpoints/
+codemind/checkpoints_instruct/
+models/fine_tuned/
+models/CodeMind-*/
+checkpoint-*/
+*.safetensors
+*.pt
+*.bin
+*.model
+*.json
+!config.json
+!tokenizer_config.json
+!special_tokens_map.json
+!generation_config.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

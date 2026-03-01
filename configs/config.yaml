@@ -1,0 +1,62 @@
+app:
+  debug: false
+  language: tr
+  name: MyBabyAI
+  version: 1.0.0
+gui:
+  font_family: Segoe UI
+  font_size: 11
+  sidebar_width: 300
+  theme: dark
+  window_size:
+  - 1200
+  - 800
+inference:
+  max_new_tokens: 2048
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.95
+memory:
+  chunk_overlap: 50
+  chunk_size: 512
+  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  max_history: 100
+  vector_db_path: data/chroma
+model:
+  codemind:
+    checkpoint_dirs:
+    - checkpoints
+    - checkpoints_instruct
+    min_compatibility_ratio: 0.6
+  default_model: CodeMind-125M
+  device: auto
+  load_in_4bit: true
+  lora:
+    lora_alpha: 32
+    lora_dropout: 0.05
+    r: 16
+    target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+  max_memory: 10GB
+  model_path: models/
+training:
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: auto
+  learning_rate: 0.0002
+  logging_steps: 10
+  max_length: 256
+  num_train_epochs: 3
+  optim: adamw_torch
+  output_dir: models/fine_tuned
+  pack_sequences: true
+  per_device_train_batch_size: 8
+  qlora:
+    bnb_4bit_compute_dtype: float16
+    bnb_4bit_quant_type: nf4
+    use_qlora: true
+  save_steps: 500
+  torch_compile: false
+  warmup_steps: 100
