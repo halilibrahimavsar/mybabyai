@@ -205,11 +205,11 @@ class DatasetDownloader:
                 self.logger.info(f"Split deneniyor: {s}")
                 if config:
                     dataset = load_dataset(
-                        dataset_name, config, split=s, token=token
+                        dataset_name, config, split=s, token=token, trust_remote_code=True
                     )
                 else:
                     dataset = load_dataset(
-                        dataset_name, split=s, token=token
+                        dataset_name, split=s, token=token, trust_remote_code=True
                     )
 
                 conversations = self._convert_to_conversations(dataset, max_samples)
@@ -334,11 +334,11 @@ class DatasetDownloader:
                 self.logger.info(f"Split deneniyor: {s}")
                 if config:
                     dataset = load_dataset(
-                        huggingface_id, config, split=s, token=token
+                        huggingface_id, config, split=s, token=token, trust_remote_code=True
                     )
                 else:
                     dataset = load_dataset(
-                        huggingface_id, split=s, token=token
+                        huggingface_id, split=s, token=token, trust_remote_code=True
                     )
 
                 return self._convert_to_conversations(dataset, max_samples)

@@ -17,9 +17,10 @@ def main():
     parser.add_argument("--dataset", type=str, required=True, 
                         help="Dataset key (e.g., tiny_shakespeare) or path to a local text/json file")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=4, help="Training batch size")
+    parser.add_argument("--batch-size", type=int, default=8, help="Training batch size")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--fresh-model", action="store_true", help="Train a completely new model from scratch")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to a specific model checkpoint to load (e.g. codemind/checkpoints/model_best.pt)")
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
     
@@ -39,7 +40,9 @@ def main():
         model_manager.load_fresh_model()
     else:
         try:
-            model_manager.load_model("CodeMind-125M")
+            model_name = args.checkpoint if args.checkpoint else "CodeMind-125M"
+            logger.info(f"Loading CodeMind model: {model_name}...")
+            model_manager.load_model(model_name)
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             logger.info("Hint: pass --fresh-model to initialize a new model from scratch.")
@@ -53,10 +56,18 @@ def main():
         logger.info(f"Loading local file: {dataset_path}")
         if dataset_path.suffix == ".json":
             import json
+            from src.core.prompting import build_instruction_prompt
             with open(dataset_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    texts = [item.get("text", str(item)) if isinstance(item, dict) else str(item) for item in data]
+                    for item in data:
+                        if isinstance(item, dict):
+                            if "user" in item and "assistant" in item:
+                                texts.append(build_instruction_prompt(user=item["user"], assistant=item["assistant"]))
+                            else:
+                                texts.append(item.get("text", str(item)))
+                        else:
+                            texts.append(str(item))
                 else:
                     texts = [str(data)]
         else:
@@ -65,17 +76,25 @@ def main():
     else:
         downloader = DatasetDownloader()
         available = downloader.list_available_datasets()
+        ds_list = []
         if args.dataset in available:
             logger.info(f"Downloading pre-defined dataset: {args.dataset}...")
-            ds_dict = downloader.download_dataset(args.dataset)
-            if ds_dict and len(ds_dict) > 0:
-                # Use the first split directly
-                first_split = list(ds_dict.values())[0]
-                texts = [item.get("text", "") for item in first_split]
+            ds_list = downloader.download_dataset(args.dataset)
         else:
-            logger.error(f"Dataset '{args.dataset}' not found locally or in predefined keys.")
-            logger.info(f"Available predefined datasets: {', '.join(available.keys())}")
-            sys.exit(1)
+            logger.info(f"Attempting to download custom HuggingFace dataset: {args.dataset}...")
+            try:
+                ds_list = downloader.download_custom(args.dataset)
+            except Exception as e:
+                logger.error(f"Dataset '{args.dataset}' not found locally, in predefined keys, or on HuggingFace: {e}")
+                logger.info(f"Available predefined datasets: {', '.join(available.keys())}")
+                sys.exit(1)
+                
+        if ds_list and len(ds_list) > 0:
+            from src.core.prompting import build_instruction_prompt
+            texts = [
+                build_instruction_prompt(user=item.get("user", ""), assistant=item.get("assistant", ""))
+                for item in ds_list if isinstance(item, dict)
+            ]
             
     # Filter empty texts
     texts = [t for t in texts if t]

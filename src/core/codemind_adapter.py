@@ -202,6 +202,12 @@ class CodeMindAdapter:
             checkpoint_path = self._resolve_checkpoint_path()
         else:
             checkpoint_path = Path(checkpoint_path)
+            if not checkpoint_path.exists():
+                # Be forgiving if the user provided an absolute path from the project root (e.g. /codemind/...)
+                rel_path = str(checkpoint_path).lstrip("/")
+                potential_path = self.config.base_dir / rel_path
+                if potential_path.exists():
+                    checkpoint_path = potential_path
 
         if checkpoint_path is None or not checkpoint_path.exists():
             searched = ", ".join(str(p) for p in self._checkpoint_dirs)
