@@ -27,8 +27,8 @@ def main():
     args = parser.parse_args()
     
     config = Config()
-    config.set("training.num_epochs", args.epochs)
-    config.set("training.batch_size", args.batch_size)
+    config.set("training.num_train_epochs", args.epochs)
+    config.set("training.per_device_train_batch_size", args.batch_size)
     config.set("training.learning_rate", args.lr)
     config.set("model.lora.r", args.lora_r)
     config.set("model.lora.lora_alpha", args.lora_alpha)

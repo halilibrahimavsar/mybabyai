@@ -147,7 +147,7 @@ from src.utils.config import Config
 class CodeMindTrainer:
     def __init__(self, config_path: Optional[str] = None, device: str = "auto"):
         self.config_obj = Config(config_path) if config_path else Config()
-        self.config = self.config_obj.data
+        self.config = self.config_obj._config
         
         self.model_manager = ModelManager(config=self.config_obj)
         self.device = self.model_manager.device

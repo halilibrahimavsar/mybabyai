@@ -115,6 +115,20 @@ class ModelManager:
                     self.is_fine_tuned = False
                     return
 
+                # Check if target_modules match the base model
+                target_modules = config_data.get("target_modules", [])
+                if isinstance(target_modules, list) and len(target_modules) > 0 and self.model is not None:
+                    model_modules = [name for name, _ in self.model.named_modules()]
+                    matches_found = False
+                    for target in target_modules:
+                        if any(target in name or name.endswith(target) for name in model_modules):
+                            matches_found = True
+                            break
+                    if not matches_found:
+                        self.logger.warning(f"Adapter hedef katmanları {target_modules} modelde bulunamadı. Uyumsuz adapter yoksayılıyor.")
+                        self.is_fine_tuned = False
+                        return
+
                 self._load_lora_adapter(adapter_dir)
                 self.is_fine_tuned = True
             except Exception as e:
