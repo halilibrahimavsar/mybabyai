@@ -294,6 +294,33 @@ class TrainerWidget(QWidget):
         """)
         form_layout = QFormLayout(form_group)
 
+        self.training_type_combo = QComboBox()
+        self.training_type_combo.addItem("LoRA (Hızlı & Düşük Bellek)", "lora")
+        self.training_type_combo.addItem("Full (Tüm Ağırlıklar)", "full")
+        self.training_type_combo.setToolTip("LoRA ile hızlı ince ayar veya tam parametre eğitimi seçin.")
+        
+        # Status label for warnings
+        self.training_type_warning = QLabel("")
+        self.training_type_warning.setStyleSheet("color: #ff9800; font-size: 11px;")
+        
+        # Check load_in_4bit status dynamically if possible
+        is_4bit = self.config.get("model.load_in_4bit", False)
+        if hasattr(self.main_window, "model_manager") and self.main_window.model_manager and self.main_window.model_manager.model:
+            is_4bit = getattr(self.main_window.model_manager, "load_in_4bit", is_4bit)
+
+        if is_4bit:
+            self.training_type_combo.setItemData(1, 0, Qt.ItemDataRole.UserRole - 1) # Disables item
+            self.training_type_combo.setToolTip("4-bit quantizasyon aktifken Full Training yapılamaz.")
+            self.training_type_warning.setText("⚠️ 4-bit aktif: Sadece LoRA desteklenir.")
+            
+        form_layout.addRow("Eğitim Türü:", self.training_type_combo)
+        form_layout.addRow("", self.training_type_warning)
+
+        # Connect change to uncheck resume
+        self.training_type_combo.currentIndexChanged.connect(
+            self._on_training_type_changed
+        )
+
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 100)
         self.epochs_spin.setValue(self.config.get("training.num_train_epochs", 3))
@@ -698,6 +725,7 @@ class TrainerWidget(QWidget):
             return
 
         training_config = {
+            "training_type": self.training_type_combo.currentData(),
             "num_train_epochs": self.epochs_spin.value(),
             "per_device_train_batch_size": self.batch_size_spin.value(),
             "gradient_accumulation_steps": self.grad_accum_spin.value(),
@@ -843,3 +871,21 @@ class TrainerWidget(QWidget):
         if self.download_thread:
             self.download_thread.deleteLater()
             self.download_thread = None
+    def _on_training_type_changed(self, index: int) -> None:
+        """Handle training type change."""
+        self.resume_check.setChecked(False)
+        
+        # Double check 4-bit if they somehow triggered this
+        is_4bit = self.config.get("model.load_in_4bit", False)
+        if hasattr(self.main_window, "model_manager") and self.main_window.model_manager and self.main_window.model_manager.model:
+            is_4bit = getattr(self.main_window.model_manager, "load_in_4bit", is_4bit)
+            
+        if index == 1 and is_4bit: # Full selected
+            QMessageBox.warning(
+                self, 
+                "Geçersiz Seçim", 
+                "Model şu an 4-bit (Quantized) modunda yüklü. \n\n"
+                "Tam Parametre Eğitimi (Full Training) için modelin 16-bit veya 32-bit (FP16/FP32) modunda yüklenmiş olması gerekir.\n\n"
+                "Lütfen Ayarlar -> Model sekmesinden 'load_in_4bit' seçeneğini kapatıp uygulamayı yeniden başlatın."
+            )
+            self.training_type_combo.setCurrentIndex(0) # Back to LoRA

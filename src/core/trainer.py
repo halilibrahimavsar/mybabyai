@@ -42,11 +42,25 @@ class LoRATrainer:
         self.progress_callback = None
         self.should_stop = False
 
-    def prepare_model_for_training(self) -> None:
+    def prepare_model_for_training(self, training_type: str = "lora") -> None:
         if self.model_manager.model is None:
             raise ValueError("Model yüklenmemiş")
 
         model = self.model_manager.model
+
+        if training_type == "full":
+            self.logger.info("Full Training (Tam Parametre Eğitimi) başlatılıyor. LoRA kullanılmayacak.")
+            # Ensure all parameters require gradients
+            model.train()
+            for param in model.parameters():
+                param.requires_grad = True
+                
+            # If model was loaded in 4-bit, we can't easily do full training, warn the user
+            if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+                self.logger.warning("DİKKAT: Model quantized (4-bit/8-bit) olarak yüklendiği için Full Training yapılamaz veya hatalı sonuç verebilir. Lütfen konfigürasyondan load_in_4bit'i kapatın.")
+            
+            self.model_manager.model = model
+            return
 
         if self.config.get("model.load_in_4bit", False):
             model = prepare_model_for_kbit_training(model)
@@ -221,7 +235,8 @@ class LoRATrainer:
         if self.model_manager.model is None or self.model_manager.tokenizer is None:
             raise ValueError("Model ve tokenizer yüklenmiş olmalı")
 
-        self.prepare_model_for_training()
+        training_type = training_kwargs.pop("training_type", "lora")
+        self.prepare_model_for_training(training_type=training_type)
         
         # If resuming, we don't necessarily need to reload PeftModel if it's already one,
         # HF Trainer will handle it from checkpoint.
@@ -269,7 +284,8 @@ class LoRATrainer:
         if self.model_manager.model is None or self.model_manager.tokenizer is None:
             raise ValueError("Model ve tokenizer yüklenmiş olmalı")
 
-        self.prepare_model_for_training()
+        training_type = training_kwargs.pop("training_type", "lora")
+        self.prepare_model_for_training(training_type=training_type)
 
         max_length = int(
             training_kwargs.pop(
@@ -328,7 +344,8 @@ class LoRATrainer:
         if self.model_manager.model is None or self.model_manager.tokenizer is None:
             raise ValueError("Model ve tokenizer yüklenmiş olmalı")
 
-        self.prepare_model_for_training()
+        training_type = training_kwargs.pop("training_type", "lora")
+        self.prepare_model_for_training(training_type=training_type)
 
         max_length = int(
             training_kwargs.pop(
@@ -462,6 +479,9 @@ class LoRATrainer:
                 else:
                     raw_state_dict = self.model_manager.model.state_dict()
                 
+                # If full training, we want all weights. 
+                # If LoRA, we might just want to save the adapters or base model depending on design.
+                # Here we save base weights without lora params for CodeMind checkpoint format.
                 state_dict = {k: v for k, v in raw_state_dict.items() if "lora_" not in k and "modules_to_save" not in k}
                 checkpoint = {"model_state_dict": state_dict}
                 
@@ -494,7 +514,13 @@ class LoRATrainer:
 
         except Exception as e:
             self.is_training = False
-            self.logger.error(f"Eğitim hatası: {e}")
+            error_msg = str(e)
+            if "optimizer" in error_msg.lower() and "match the size" in error_msg.lower():
+                self.logger.error("HATA: Optimizer (Eğitim Hafızası) uyuşmazlığı tıkandı! \n"
+                                  "Neden: Muhtemelen LoRA ve Full Training arasında geçiş yaptınız veya model yapısını değiştirdiniz.\n"
+                                  "Çözüm: 'Kaldığı Yerden Devam Et (Resume)' seçeneğini kapatın veya farklı bir 'Çıktı Dizini' belirleyin.")
+            else:
+                self.logger.error(f"Eğitim hatası: {e}")
             raise
 
     def stop_training(self) -> None:

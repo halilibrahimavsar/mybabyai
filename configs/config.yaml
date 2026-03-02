@@ -30,7 +30,7 @@ model:
     min_compatibility_ratio: 0.6
   default_model: codemind/checkpoints_instruct/model_best.pt
   device: cuda
-  load_in_4bit: true
+  load_in_4bit: false
   lora:
     lora_alpha: 32
     lora_dropout: 0.05
@@ -58,6 +58,6 @@ training:
     bnb_4bit_compute_dtype: float16
     bnb_4bit_quant_type: nf4
     use_qlora: true
-  save_steps: 500
+  save_steps: 100
   torch_compile: false
   warmup_steps: 100

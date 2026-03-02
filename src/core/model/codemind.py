@@ -664,8 +664,13 @@ class CodeMindForCausalLM(PreTrainedModel, GenerationMixin):
         self.model = CodeMindModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        # Tie weights
-        self.lm_head.weight = self.model.word_embeddings.weight
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def _tie_weights(self):
+        """Tie embeddings and output head weights."""
+        if self.config.tie_word_embeddings:
+            self.set_output_embeddings(self.get_input_embeddings())
 
     def forward(
         self,
