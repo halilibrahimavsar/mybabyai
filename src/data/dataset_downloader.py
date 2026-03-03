@@ -151,6 +151,36 @@ class DatasetDownloader:
             "description": "Örnek Tar.GZ Arşivi (TR)",
             "size": "Küçük",
             "languages": ["Türkçe"],
+        },
+        "open_hermes_2_5": {
+            "name": "teknium/OpenHermes-2.5",
+            "description": "En kaliteli genel amaçlı talimat seti (EN)",
+            "size": "Çok Büyük (~2GB)",
+            "languages": ["İngilizce"],
+        },
+        "turkish_instruct_70k": {
+            "name": "vngrs-ai/turkish-instruct-70k",
+            "description": "Geniş ve temiz Türkçe talimat seti",
+            "size": "Büyük (~150MB)",
+            "languages": ["Türkçe"],
+        },
+        "trendyol_llm_instruct": {
+            "name": "Trendyol/Trendyol-LLM-Instruction-Subset-v1.0",
+            "description": "Trendyol tarafından temizlenmiş kaliteli TR set",
+            "size": "Orta (~50MB)",
+            "languages": ["Türkçe"],
+        },
+        "code_feedback": {
+            "name": "m-a-p-p-u/Code-Feedback",
+            "description": "Kodlama üzerine interaktif geri bildirimler (EN)",
+            "size": "Büyük (~500MB)",
+            "languages": ["Kodlama", "İngilizce"],
+        },
+        "wizard_code_evol": {
+            "name": "WizardLM/WizardLM_evol_instruct_V2_196k",
+            "description": "Karmaşık mantık ve kod talimatları (EN)",
+            "size": "Büyük (~200MB)",
+            "languages": ["Kodlama", "Mantık"],
         }
     }
 

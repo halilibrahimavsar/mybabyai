@@ -238,7 +238,8 @@ class CodeMindAdapter:
             if not metadata_ok:
                 self.logger.error(
                     "Checkpoint metadata mismatch: "
-                    f"metadata.vocab_size={metadata.vocab_size}, tokenizer.vocab={tokenizer_vocab}"
+                    f"metadata.vocab_size={metadata.vocab_size}, tokenizer.vocab={tokenizer_vocab}. "
+                    "Note: vocab_size=228 usually indicates a checkpoint saved with an untrained (base) tokenizer."
                 )
 
         self.model = self._build_model_from_checkpoint(checkpoint, tokenizer_vocab)
@@ -264,6 +265,15 @@ class CodeMindAdapter:
             # Strip PEFT layer wrapping (.base_layer.)
             if ".base_layer." in key:
                 key = key.replace(".base_layer.", ".")
+            
+            # Handle model. prefix mismatch (important for CausalLM wrapper vs raw model)
+            if key not in model_state:
+                if f"model.{key}" in model_state:
+                    key = f"model.{key}"
+                elif key.startswith("model.") and key[6:] in model_state:
+                    # check if the version without prefix exists
+                    if key[6:] in model_state:
+                        key = key[6:]
                 
             # Skip non-persistent buffers that are in checkpoint but not model
             if any(buf in key for buf in ["inv_freq", "cos_cached", "sin_cached"]):
