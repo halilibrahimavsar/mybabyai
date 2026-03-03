@@ -4,6 +4,17 @@ import torch
 from typing import Callable, Dict, Any
 from transformers import TrainerCallback
 
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.layout import Layout
+    from rich.text import Text
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
 class UIProgressCallback(TrainerCallback):
     """Bridges HF Trainer progress to a callable for UI updates."""
 
@@ -58,15 +69,10 @@ class NotebookProgressCallback(TrainerCallback):
         self.start_time = None
         self.last_log_time = 0
         self.metrics_history = []
-        try:
-            from rich.console import Console
-            from rich.table import Table
-            from rich.live import Live
-            self.rich_available = True
+        self.rich_available = RICH_AVAILABLE
+        if self.rich_available:
             self.console = Console()
             self.live = None
-        except ImportError:
-            self.rich_available = False
 
     def on_train_begin(self, args, state, control, **kwargs):
         self.start_time = time.time()
@@ -88,10 +94,8 @@ class NotebookProgressCallback(TrainerCallback):
                 print(f"Step: {state.global_step}/{state.max_steps} | Loss: {logs.get('loss', 0):.4f} | LR: {logs.get('learning_rate', 0):.2e}")
 
     def _generate_table(self, state, logs):
-        from rich.table import Table
-        from rich.panel import Panel
-        from rich.layout import Layout
-        from rich.text import Text
+        if not self.rich_available:
+            return None
 
         elapsed = time.time() - self.start_time if self.start_time else 0
         speed = state.global_step / elapsed if elapsed > 0 else 0

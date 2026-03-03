@@ -213,8 +213,12 @@ class DatasetDownloader:
                     )
 
                 conversations = self._convert_to_conversations(dataset, max_samples)
-                self.logger.info(f"Dataset indirildi: {len(conversations)} örnek (Split: {s})")
-                return conversations
+                if len(conversations) > 0:
+                    self.logger.info(f"Dataset indirildi: {len(conversations)} örnek (Split: {s})")
+                    return conversations
+                else:
+                    self.logger.info(f"Split {s} boş veya uyumsuz formatta, sıradakine geçiliyor...")
+                    continue
             except Exception as e:
                 last_exception = e
                 # If it's a split error, continue. Otherwise raise (e.g. auth error)
