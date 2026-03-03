@@ -217,7 +217,12 @@ class DatasetDownloader:
                     self.logger.info(f"Dataset indirildi: {len(conversations)} örnek (Split: {s})")
                     return conversations
                 else:
-                    self.logger.info(f"Split {s} boş veya uyumsuz formatta, sıradakine geçiliyor...")
+                    # Debug: Boş gelmesinin sebebini anlamak için ilk öğenin anahtarlarını basalım
+                    if len(dataset) > 0:
+                        first_item_keys = list(dataset[0].keys())
+                        self.logger.warning(f"Split '{s}' içinde geçerli format bulunamadı. Mevcut anahtarlar: {first_item_keys}")
+                    else:
+                        self.logger.info(f"Split {s} tamamen boş.")
                     continue
             except (ValueError, Exception) as e:
                 last_exception = e
