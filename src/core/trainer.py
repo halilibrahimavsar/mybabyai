@@ -424,10 +424,48 @@ class LoRATrainer:
             
             self.logger.info(f"Kaynak işleniyor: {name} ({data_type})")
             
-            if data_type == "urls":
+            if data_type == "file":
+                # Load from local file(s)
+                from src.data.dataset_loader import DatasetLoader
+                loader = DatasetLoader()
+                filepath = item.get("path", "")
+                if not filepath:
+                    self.logger.warning(f"{name}: dosya yolu belirtilmemiş, atlanıyor.")
+                    continue
+                try:
+                    convs = loader.load_from_file(filepath)
+                    if convs:
+                        ds = ConversationDataset(
+                            conversations=convs,
+                            tokenizer=self.model_manager.tokenizer,
+                            max_length=max_length,
+                            pack_sequences=pack_sequences,
+                        )
+                        datasets.append(ds)
+                        self.logger.info(f"{name}: {len(convs)} konuşma yüklendi.")
+                    else:
+                        self.logger.warning(f"{name}: dosyadan veri okunamadı, atlanıyor.")
+                except Exception as e:
+                    self.logger.error(f"{name}: dosya yüklenirken hata: {e}")
+
+            elif data_type in ("url", "urls"):
+                # Crawl text from URL(s)
                 crawler = WebCrawler()
-                self.logger.info(f"{name} için URL'ler çekiliyor...")
-                texts = crawler.crawl_urls(data)
+                urls = data if isinstance(data, list) else [item.get("url", data or "")]
+                urls = [u for u in urls if u]
+                crawl_depth = item.get("crawl_depth", 0)
+                
+                if not urls:
+                    self.logger.warning(f"{name}: URL belirtilmemiş, atlanıyor.")
+                    continue
+                    
+                self.logger.info(f"{name} için {len(urls)} URL çekiliyor (derinlik: {crawl_depth})...")
+                
+                if crawl_depth > 0:
+                    texts = crawler.crawl_with_depth(urls, depth=crawl_depth, max_pages=50)
+                else:
+                    texts = crawler.crawl_urls(urls)
+                    
                 if not texts:
                     self.logger.warning(f"{name} kaynağından metin alınamadı, atlanıyor.")
                     continue
@@ -438,6 +476,7 @@ class LoRATrainer:
                     pack_sequences=pack_sequences,
                 )
                 datasets.append(ds)
+                self.logger.info(f"{name}: {len(texts)} metin parçası çekildi.")
                 
             elif data_type == "texts":
                 ds = TextDataset(

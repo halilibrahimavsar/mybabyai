@@ -31,10 +31,11 @@ class AgentWorkerThread(QThread):
             self.finished.emit({"error": str(e), "query": self.query})
 
 class AgentMessageBubble(QFrame):
-    def __init__(self, text: str, is_user: bool = True, is_tool: bool = False, parent=None):
+    def __init__(self, text: str, is_user: bool = True, is_tool: bool = False, is_thought: bool = False, parent=None):
         super().__init__(parent)
         self.is_user = is_user
         self.is_tool = is_tool
+        self.is_thought = is_thought
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
@@ -62,6 +63,16 @@ class AgentMessageBubble(QFrame):
             """)
             layout.addWidget(container)
             layout.addStretch()
+        elif self.is_thought:
+            container.setStyleSheet("""
+                QFrame {
+                    background-color: #3b186e;
+                    border: 1px solid #581c87;
+                    border-radius: 12px;
+                }
+            """)
+            layout.addWidget(container)
+            layout.addStretch()
         else:
             container.setStyleSheet("""
                 QFrame {
@@ -73,7 +84,16 @@ class AgentMessageBubble(QFrame):
             layout.addWidget(container)
             layout.addStretch()
             
-        header = QLabel("Siz" if is_user else ("Agent Aracı" if is_tool else "Agent"))
+        title_text = "Siz"
+        if not is_user:
+            if is_tool:
+                title_text = "🔧 Agent Aracı"
+            elif self.is_thought:
+                title_text = "🧠 MCTS Düşünce Zinciri"
+            else:
+                title_text = "🤖 Agent"
+
+        header = QLabel(title_text)
         header.setStyleSheet("""
             QLabel {
                 color: #94a3b8;
@@ -181,6 +201,10 @@ class AgentWidget(QWidget):
             
         planned = result.get("planned_calls", [])
         trace = result.get("trace", [])
+        thought_process = result.get("thought_process", "")
+        
+        if thought_process:
+            self._add_message(thought_process, is_user=False, is_thought=True)
         
         if not planned:
             self._add_message("Agent bu görev için plan yapamadı veya çalıştıracak araç bulamadı.", is_user=False)
@@ -207,8 +231,8 @@ class AgentWidget(QWidget):
         status_msg = "Görev başarıyla tamamlandı." if success else "Görev tamamlanamadı veya bazı araçlar hata verdi."
         self._add_message(status_msg, is_user=False)
 
-    def _add_message(self, text: str, is_user: bool, is_tool: bool = False):
-        bubble = AgentMessageBubble(text, is_user, is_tool)
+    def _add_message(self, text: str, is_user: bool, is_tool: bool = False, is_thought: bool = False):
+        bubble = AgentMessageBubble(text, is_user, is_tool, is_thought)
         self.chat_layout.addWidget(bubble)
         # Scroll to bottom
         scrollbar = self.scroll_area.verticalScrollBar()

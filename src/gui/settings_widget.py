@@ -68,10 +68,7 @@ class SettingsWidget(QWidget):
         """)
 
         model_tab = self._create_model_tab()
-        tabs.addTab(model_tab, "🤖 Model")
-
-        inference_tab = self._create_inference_tab()
-        tabs.addTab(inference_tab, "💬 Çıkarım")
+        tabs.addTab(model_tab, "🤖 Uygulama & Model")
 
         memory_tab = self._create_memory_tab()
         tabs.addTab(memory_tab, "🧠 Hafıza")
@@ -144,85 +141,7 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(lora_group)
 
-        model_info_group = QGroupBox("Model Bilgileri")
-        model_info_group.setStyleSheet(self._group_style())
-        info_layout = QVBoxLayout(model_info_group)
-
-        self.model_info_label = QLabel("Model yüklenmedi")
-        self.model_info_label.setWordWrap(True)
-        info_layout.addWidget(self.model_info_label)
-
-        load_model_btn = QPushButton("Kayıtlı Modeli Yükle")
-        load_model_btn.clicked.connect(self._load_model)
-        load_model_btn.setStyleSheet(self._button_style())
-        info_layout.addWidget(load_model_btn)
-
-        new_model_btn = QPushButton("Sıfır CodeMind Modeli Oluştur / Yükle")
-        new_model_btn.clicked.connect(self._load_fresh_model)
-        new_model_btn.setStyleSheet(self._button_style("#10b981")) # emerald
-        info_layout.addWidget(new_model_btn)
-
-        unload_model_btn = QPushButton("Model Kaldır")
-        unload_model_btn.clicked.connect(self._unload_model)
-        unload_model_btn.setStyleSheet(self._button_style("#ef4444"))
-        info_layout.addWidget(unload_model_btn)
-
-        layout.addWidget(model_info_group)
-
-        layout.addStretch()
-        return widget
-
-    def _create_inference_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        gen_group = QGroupBox("Üretim Parametreleri")
-        gen_group.setStyleSheet(self._group_style())
-        gen_layout = QFormLayout(gen_group)
-
-        self.max_tokens_spin = QSpinBox()
-        self.max_tokens_spin.setRange(64, 8192)
-        self.max_tokens_spin.setValue(2048)
-        gen_layout.addRow("Maksimum Token:", self.max_tokens_spin)
-
-        self.temp_spin = QDoubleSpinBox()
-        self.temp_spin.setRange(0.0, 2.0)
-        self.temp_spin.setSingleStep(0.1)
-        self.temp_spin.setValue(0.7)
-        gen_layout.addRow("Temperature:", self.temp_spin)
-
-        self.top_p_spin = QDoubleSpinBox()
-        self.top_p_spin.setRange(0.0, 1.0)
-        self.top_p_spin.setSingleStep(0.05)
-        self.top_p_spin.setValue(0.95)
-        gen_layout.addRow("Top P:", self.top_p_spin)
-
-        self.top_k_spin = QSpinBox()
-        self.top_k_spin.setRange(1, 100)
-        self.top_k_spin.setValue(50)
-        gen_layout.addRow("Top K:", self.top_k_spin)
-
-        self.rep_penalty_spin = QDoubleSpinBox()
-        self.rep_penalty_spin.setRange(1.0, 2.0)
-        self.rep_penalty_spin.setSingleStep(0.05)
-        self.rep_penalty_spin.setValue(1.1)
-        gen_layout.addRow("Repetition Penalty:", self.rep_penalty_spin)
-
-        layout.addWidget(gen_group)
-
-        system_group = QGroupBox("Sistem Promptu")
-        system_group.setStyleSheet(self._group_style())
-        system_layout = QVBoxLayout(system_group)
-
-        self.system_prompt_edit = QLineEdit()
-        self.system_prompt_edit.setPlaceholderText("Sistem promptu...")
-        self.system_prompt_edit.setText(
-            "Sen yardımsever, bilgili ve nazik bir AI asistanısın."
-        )
-        system_layout.addWidget(self.system_prompt_edit)
-
-        layout.addWidget(system_group)
-
+        # Removed redundant model loading buttons and info - Now handled by Model Hub
         layout.addStretch()
         return widget
 
@@ -383,7 +302,6 @@ class SettingsWidget(QWidget):
 
     def set_model_manager(self, manager: ModelManager) -> None:
         self.model_manager = manager
-        self._update_model_info()
 
     def set_memory_manager(self, manager: MemoryManager) -> None:
         self.memory_manager = manager
@@ -402,11 +320,6 @@ class SettingsWidget(QWidget):
         self.lora_dropout_spin.setValue(
             self.config.get("model.lora.lora_dropout", 0.05)
         )
-
-        self.max_tokens_spin.setValue(self.config.get("inference.max_new_tokens", 2048))
-        self.temp_spin.setValue(self.config.get("inference.temperature", 0.7))
-        self.top_p_spin.setValue(self.config.get("inference.top_p", 0.95))
-        self.top_k_spin.setValue(self.config.get("inference.top_k", 50))
 
         self.embedding_model_combo.setEditText(
             self.config.get("memory.embedding_model", "")
@@ -427,11 +340,6 @@ class SettingsWidget(QWidget):
         self.config.set("model.lora.lora_alpha", self.lora_alpha_spin.value())
         self.config.set("model.lora.lora_dropout", self.lora_dropout_spin.value())
 
-        self.config.set("inference.max_new_tokens", self.max_tokens_spin.value())
-        self.config.set("inference.temperature", self.temp_spin.value())
-        self.config.set("inference.top_p", self.top_p_spin.value())
-        self.config.set("inference.top_k", self.top_k_spin.value())
-
         self.config.set(
             "memory.embedding_model", self.embedding_model_combo.currentText()
         )
@@ -442,53 +350,7 @@ class SettingsWidget(QWidget):
         self.config.save()
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi!")
 
-    def _load_model(self) -> None:
-        selected_model = self.model_combo.currentText()
-        self.main_window.load_model(selected_model)
-        self._update_model_info()
-
-    def _load_fresh_model(self) -> None:
-        if not self.main_window.model_manager:
-            from src.core.model_manager import ModelManager
-            self.main_window.model_manager = ModelManager(self.config)
-            self.model_manager = self.main_window.model_manager
-
-        try:
-            self.main_window.status_bar.showMessage("Sıfır model oluşturuluyor...")
-            self.main_window._set_model_status("Model: Oluşturuluyor...", "#fde68a")
-            # Creating a fresh model is very fast (init random tensors), so we run it sync
-            self.model_manager.load_fresh_model()
-            self.main_window._on_model_loaded()
-            self._update_model_info()
-            QMessageBox.information(
-                self,
-                "Başarılı",
-                "Sıfır CodeMind modeli başarıyla oluşturuldu ve yüklendi.\nModeli 'Eğitim' sekmesinde eğitebilirsiniz."
-            )
-        except Exception as e:
-            self.logger.error(f"Sıfır model oluşturma hatası: {e}")
-            self.main_window._on_model_load_error(str(e))
-
-    def _unload_model(self) -> None:
-        self.main_window.unload_model()
-        self._update_model_info()
-
-    def _update_model_info(self) -> None:
-        if self.model_manager:
-            info = self.model_manager.get_model_info()
-            if info.get("status") == "not_loaded":
-                self.model_info_label.setText("Model yüklenmedi")
-            else:
-                self.model_info_label.setText(
-                    f"Model: {info.get('model_name', 'Bilinmiyor')}\n"
-                    f"Cihaz: {info.get('device', 'Bilinmiyor')}\n"
-                    f"Toplam Parametre: {info.get('total_parameters', 0):,}\n"
-                    f"Eğitilebilir: {info.get('trainable_parameters', 0):,}\n"
-                    f"Eğitilebilir Yüzde: {info.get('trainable_percentage', '0%')}\n"
-                    f"Quantized: {info.get('quantized', False)}"
-                )
-        else:
-            self.model_info_label.setText("Model yüklenmedi")
+        QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi!")
 
     def _add_document(self) -> None:
         filepath, _ = QFileDialog.getOpenFileName(

@@ -209,6 +209,7 @@ class AgentCoworker:
         self.max_retries = max_retries
         self.trace: List[ToolResult] = []
         self.inference_engine = inference_engine
+        self.thought_process: str = ""
 
     def _plan_with_llm(self, user_query: str) -> List[ToolCall]:
         tools_info = []
@@ -217,20 +218,43 @@ class AgentCoworker:
             if tool:
                 tools_info.append(f"- {name}: {tool.description}")
         tools_desc = "\n".join(tools_info)
-        prompt = f"""You are a planning agent. Available tools:
+        prompt = f"""You are an autonomous planning agent. Available tools:
 {tools_desc}
 User query: {user_query}
-Respond ONLY with a JSON array of tool calls. Example: [{{"tool_name": "repo_search", "args": {{"query": "User"}}}}]. Do not add any conversational text.
+
+First, think step-by-step about what tools to use and why.
+Then, respond with a JSON array of tool calls inside a ```json block. 
+Example:
+I need to search the repo to find the file.
+```json
+[{{"tool_name": "repo_search", "args": {{"query": "User"}}}}]
+```
 """
         try:
-            response_chunks = list(self.inference_engine.generate_stream(prompt, max_new_tokens=512))
-            response = "".join(response_chunks).strip()
+            # Check if inference engine is capable of MCTS (System 2)
+            if hasattr(self.inference_engine, 'reward_model') and hasattr(self.inference_engine, '_lm_generate_multiple'):
+                from src.core.cognitive.reasoning_engine import ReasoningEngine
+                engine = ReasoningEngine(
+                    language_model_generate=self.inference_engine._lm_generate_multiple,
+                    reward_evaluator=self.inference_engine.reward_model.evaluate,
+                    max_depth=3, # Shallow depth to avoid infinite loops in JSON planning
+                    simulations_per_step=3,
+                    branching_factor=2
+                )
+                response = engine.search(prompt)
+                self.thought_process = response
+            else:
+                response_chunks = list(self.inference_engine.generate_stream(prompt, max_new_tokens=1024))
+                response = "".join(response_chunks).strip()
+                self.thought_process = response
+
+            json_text = response
             if "```json" in response:
-                response = response.split("```json")[1].split("```")[0].strip()
+                json_text = response.split("```json")[1].split("```")[0].strip()
             elif "```" in response:
-                response = response.split("```")[1].split("```")[0].strip()
+                json_text = response.split("```")[1].split("```")[0].strip()
             
-            calls = json.loads(response)
+            calls = json.loads(json_text)
             if isinstance(calls, list):
                 tool_calls = []
                 for call in calls:
@@ -264,6 +288,7 @@ Respond ONLY with a JSON array of tool calls. Example: [{{"tool_name": "repo_sea
 
     def run(self, user_query: str) -> Dict[str, Any]:
         self.trace = []
+        self.thought_process = ""
         planned_calls = self._plan(user_query)
 
         for call in planned_calls:
@@ -291,5 +316,6 @@ Respond ONLY with a JSON array of tool calls. Example: [{{"tool_name": "repo_sea
             "query": user_query,
             "planned_calls": [asdict(c) for c in planned_calls],
             "trace": [asdict(r) for r in self.trace],
+            "thought_process": self.thought_process,
             "success": all(item.ok for item in self.trace) if self.trace else False,
         }

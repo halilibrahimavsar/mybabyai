@@ -18,6 +18,10 @@ from src.core.model_manager import ModelManager
 from src.core.memory import MemoryManager
 from transformers.cache_utils import DynamicCache
 from src.core.prompting import TOKENS, build_chat_prompt, extract_assistant_response
+from src.core.cognitive.router import CognitiveRouter
+from src.core.cognitive.modes import CognitiveMode
+from src.core.cognitive.reward_model import DualRewardEvaluator
+from src.core.cognitive.reasoning_engine import ReasoningEngine
 
 def _patch_dynamic_cache():
     if not hasattr(DynamicCache, "seen_tokens"):
@@ -66,6 +70,45 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
         self.top_k = 50
         self.repetition_penalty = 1.1
 
+        # Cognitive Engine Components
+        self.router = CognitiveRouter()
+        self.reward_model = DualRewardEvaluator() # Base heuristic reward initially
+
+    def _lm_generate_multiple(self, context: str, n_samples: int) -> List[str]:
+        """Wrapper to generate multiple subsequent possible thoughts for MCTS."""
+        # Simple implementation for expansion: repeatedly call generate or use beam search conceptually
+        thoughts = []
+        # For efficiency, we just do a loop with high temperature to get diverse steps.
+        # Ensure we don't infinitely recurse System 2 logic by using internal generate
+        for _ in range(n_samples):
+             # Fast internal generation
+             response = self._fast_generate(context, max_new_tokens=150, temperature=0.9)
+             thoughts.append(response)
+        return thoughts
+
+    def _fast_generate(self, user_input: str, **generation_kwargs) -> str:
+        """Internal fast generation completely skipping System 2."""
+        prompt = self.format_prompt(user_input)
+        inputs = self.model_manager.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=4096
+        )
+        if self.model_manager.device == "cuda":
+            inputs = {k: v.cuda() for k, v in inputs.items()}
+            
+        stop_tokens = [self.model_manager.tokenizer.eos_token_id]
+        with torch.no_grad():
+            outputs = self.model_manager.model.generate(
+                **inputs,
+                max_new_tokens=generation_kwargs.get("max_new_tokens", self.max_new_tokens),
+                temperature=generation_kwargs.get("temperature", self.temperature),
+                do_sample=True,
+                pad_token_id=self.model_manager.tokenizer.pad_token_id,
+            )
+        generated_text = self.model_manager.tokenizer.decode(
+            outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
+        )
+        return extract_assistant_response(generated_text)
+
     def format_prompt(
         self,
         user_input: str,
@@ -86,6 +129,7 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
         user_input: str,
         use_memory: bool = True,
         history: Optional[List[Dict[str, str]]] = None,
+        mode_callback: Optional[callable] = None,
         **generation_kwargs,
     ) -> str:
         if self.model_manager.model is None or self.model_manager.tokenizer is None:
@@ -98,6 +142,28 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
         if use_memory and self.memory_manager:
             context = self.memory_manager.get_relevant_context(user_input)
 
+        # -------------------------------------------------------------
+        # System 1 / System 2 Routing
+        # -------------------------------------------------------------
+        mode_config = self.router.route(user_input)
+        
+        simulations = mode_config.simulations_per_step * mode_config.max_depth if mode_config.use_mcts else 0
+        if mode_callback:
+            mode_callback(mode_config.mode.value, simulations)
+
+        if mode_config.use_mcts:
+            self.logger.info(f"System 2 devrede: {mode_config.mode.value}. Derin düşünülüyor...")
+            engine = ReasoningEngine(
+                language_model_generate=self._lm_generate_multiple,
+                reward_evaluator=self.reward_model.evaluate,
+                max_depth=mode_config.max_depth,
+                simulations_per_step=mode_config.simulations_per_step,
+                branching_factor=mode_config.branching_factor
+            )
+            initial_state = self.format_prompt(user_input, context, history)
+            return engine.search(initial_state)
+            
+        self.logger.info("System 1 devrede. Hızlı yanıt üretiliyor...")
         prompt = self.format_prompt(user_input, context, history)
 
         inputs = self.model_manager.tokenizer(
@@ -169,6 +235,7 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
         user_input: str,
         use_memory: bool = True,
         history: Optional[List[Dict[str, str]]] = None,
+        mode_callback: Optional[callable] = None,
         **generation_kwargs,
     ) -> Generator[str, None, None]:
         if self.model_manager.model is None or self.model_manager.tokenizer is None:
@@ -183,6 +250,32 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
         context = None
         if use_memory and self.memory_manager:
             context = self.memory_manager.get_relevant_context(user_input)
+            
+        mode_config = self.router.route(user_input)
+        simulations = mode_config.simulations_per_step * mode_config.max_depth if mode_config.use_mcts else 0
+        if mode_callback:
+            mode_callback(mode_config.mode.value, simulations)
+
+        if mode_config.use_mcts:
+            self.logger.info(f"System 2 devrede: {mode_config.mode.value}. Derin düşünülüyor...")
+            engine = ReasoningEngine(
+                language_model_generate=self._lm_generate_multiple,
+                reward_evaluator=self.reward_model.evaluate,
+                max_depth=mode_config.max_depth,
+                simulations_per_step=mode_config.simulations_per_step,
+                branching_factor=mode_config.branching_factor
+            )
+            initial_state = self.format_prompt(user_input, context, history)
+            
+            # Since MCTS returns the final output, stream it by yielding the whole text
+            final_response = engine.search(initial_state)
+            yield final_response
+            
+            if use_memory and self.memory_manager:
+                self.memory_manager.add_conversation(user_input, final_response.strip())
+            return
+            
+        self.logger.info("System 1 devrede. Hızlı yanıt üretiliyor...")
 
         prompt = self.format_prompt(user_input, context, history)
 

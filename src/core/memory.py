@@ -5,6 +5,9 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
+import time
+import math
+from datetime import datetime
 
 import sys
 
@@ -26,6 +29,8 @@ class MemoryManager:
         self.chunk_size = self.config.get("memory.chunk_size", 512)
         self.chunk_overlap = self.config.get("memory.chunk_overlap", 50)
         self.max_history = self.config.get("memory.max_history", 100)
+        
+        self.decay_lambda = self.config.get("memory.decay_lambda", 0.01) # lambda param for exponential decay
 
         self._setup_embedding_model()
         self._setup_chroma()
@@ -78,6 +83,9 @@ class MemoryManager:
             chunk_id = f"{doc_id or 'doc'}_chunk_{i}" if doc_id else None
             chunk_metadata = metadata.copy() if metadata else {}
             chunk_metadata["chunk_index"] = i
+            chunk_metadata["created_at"] = time.time()
+            chunk_metadata["last_accessed"] = time.time()
+            chunk_metadata["access_count"] = 0
 
             ids.append(chunk_id or f"doc_{len(documents)}_{i}")
             metadatas.append(chunk_metadata)
@@ -135,15 +143,65 @@ class MemoryManager:
     def search_documents(
         self, query: str, n_results: int = 5, where: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        # Fetch more to apply decay calculation before truncating
+        fetch_count = n_results * 3
         results = self.documents_collection.query(
-            query_texts=[query], n_results=n_results, where=where
+            query_texts=[query], n_results=fetch_count, where=where
         )
 
+        if not results["ids"] or not results["ids"][0]:
+             return {"ids": [], "documents": [], "metadatas": [], "distances": []}
+
+        # Apply Nisyan (Decay) formula
+        current_time = time.time()
+        scored_results = []
+        
+        ids_to_update = []
+        metadatas_to_update = []
+
+        for j in range(len(results["ids"][0])):
+            doc_id = results["ids"][0][j]
+            dist = results["distances"][0][j]
+            meta = results["metadatas"][0][j]
+            doc = results["documents"][0][j]
+            
+            # Subtly increase distance based on age (larger distance = less relevant in chroma typically)
+            created_at = meta.get("created_at", current_time)
+            age_hours = (current_time - created_at) / 3600.0
+            
+            # Decay formula: decayed_distance = distance * e^(lambda * age_hours)
+            decayed_dist = dist * math.exp(self.decay_lambda * age_hours)
+            
+            # Bonus for frequent access
+            access_count = meta.get("access_count", 0)
+            if access_count > 0:
+                 decayed_dist = decayed_dist / (1.0 + 0.1 * math.log(1 + access_count))
+                 
+            scored_results.append((decayed_dist, doc_id, doc, meta))
+            
+        # Sort by decayed distance (ascending, so smaller distance first)
+        scored_results.sort(key=lambda x: x[0])
+        
+        # Take top n_results
+        top_results = scored_results[:n_results]
+        
+        # Update access stats for retrieved documents
+        for _, doc_id, _, meta in top_results:
+             meta["last_accessed"] = current_time
+             meta["access_count"] = meta.get("access_count", 0) + 1
+             ids_to_update.append(doc_id)
+             metadatas_to_update.append(meta)
+             
+        if ids_to_update:
+             # Find corresponding documents to pass to update
+             updated_docs = [r[2] for r in top_results]
+             self.documents_collection.update(ids=ids_to_update, metadatas=metadatas_to_update, documents=updated_docs)
+
         return {
-            "ids": results["ids"][0] if results["ids"] else [],
-            "documents": results["documents"][0] if results["documents"] else [],
-            "metadatas": results["metadatas"][0] if results["metadatas"] else [],
-            "distances": results["distances"][0] if results["distances"] else [],
+            "ids": [r[1] for r in top_results],
+            "documents": [r[2] for r in top_results],
+            "metadatas": [r[3] for r in top_results],
+            "distances": [r[0] for r in top_results],
         }
 
     def add_conversation(
@@ -155,9 +213,14 @@ class MemoryManager:
         conv_id = f"conv_{len(self.conversation_history)}"
 
         combined_text = f"Kullanıcı: {user_message}\nAsistan: {assistant_response}"
+        
+        final_meta = metadata or {}
+        final_meta["created_at"] = time.time()
+        final_meta["last_accessed"] = time.time()
+        final_meta["access_count"] = 0
 
         self.conversations_collection.add(
-            ids=[conv_id], documents=[combined_text], metadatas=[metadata or {}]
+            ids=[conv_id], documents=[combined_text], metadatas=[final_meta]
         )
 
         self.conversation_history.append(
@@ -222,3 +285,48 @@ class MemoryManager:
             "embedding_model": self.embedding_model_name,
             "chunk_size": self.chunk_size,
         }
+        
+    def zikir(self, top_k: int = 100) -> None:
+        """
+        Replay / Consolidation loop (Zikir).
+        Gathers highly accessed memories and refreshes their created_at time 
+        to combat decay, cementing them as core knowledge.
+        """
+        self.logger.info("Zikir (Memory Consolidation) başlatılıyor...")
+        
+        try:
+             # We unfortunately can't easily query "order by access_count" in default Chroma.
+             # Fetch a large chunk.
+             all_data = self.documents_collection.get()
+             if not all_data or not all_data['ids']:
+                  return
+                  
+             ids = all_data['ids']
+             metadatas = all_data['metadatas']
+             
+             # Sort by access count
+             items = list(zip(ids, metadatas))
+             items.sort(key=lambda x: x[1].get('access_count', 0), reverse=True)
+             
+             # Take top_k
+             top_items = items[:top_k]
+             
+             ids_to_update = []
+             metas_to_update = []
+             current_time = time.time()
+             
+             for doc_id, meta in top_items:
+                  if meta.get('access_count', 0) > 2: # Only consolidate if actually used
+                       # Reset creation time to essentially negate decay
+                       meta['created_at'] = current_time
+                       # Reset access count slightly to avoid exponential inflation?
+                       # We leave it for now to let them stay strong.
+                       ids_to_update.append(doc_id)
+                       metas_to_update.append(meta)
+                       
+             if ids_to_update:
+                  self.documents_collection.update(ids=ids_to_update, metadatas=metas_to_update)
+                  self.logger.info(f"Zikir tamamlandı. {len(ids_to_update)} hafıza parçası pekiştirildi.")
+                  
+        except Exception as e:
+             self.logger.error(f"Zikir işlemi sırasında hata oluştu: {e}")

@@ -33,12 +33,12 @@ class CodeMindConfig(PretrainedConfig):
     def __init__(
         self,
         vocab_size: int = 32768,
-        hidden_size: int = 1024,
+        hidden_size: int = 768,
         num_hidden_layers: int = 24,
-        num_attention_heads: int = 16,
-        num_key_value_heads: Optional[int] = None,
-        intermediate_size: int = 4096,
-        max_position_embeddings: int = 2048,
+        num_attention_heads: int = 12,
+        num_key_value_heads: int = 4,
+        intermediate_size: int = 3072,
+        max_position_embeddings: int = 4096,
         rms_norm_eps: float = 1e-6,
         hidden_dropout: float = 0.0,
         attention_dropout: float = 0.0,
@@ -76,8 +76,8 @@ class CodeMindConfig(PretrainedConfig):
         self.output_router_logits = kwargs.get("output_router_logits", False)
         
         # MoE Support
-        self.num_experts = kwargs.get("num_experts", 1)
-        self.num_experts_per_tok = kwargs.get("num_experts_per_tok", 1)
+        self.num_experts = kwargs.get("num_experts", 8)
+        self.num_experts_per_tok = kwargs.get("num_experts_per_tok", 2)
         
         super().__init__(
             tie_word_embeddings=tie_word_embeddings, 

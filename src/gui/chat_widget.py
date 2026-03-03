@@ -106,6 +106,7 @@ class GenerateThread(QThread):
     text_generated = pyqtSignal(str)
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
+    mode_selected = pyqtSignal(str, int)
 
     def __init__(
         self,
@@ -122,10 +123,16 @@ class GenerateThread(QThread):
 
     def run(self) -> None:
         try:
+            def mode_callback(mode: str, simulations: int):
+                self.mode_selected.emit(mode, simulations)
+
             if self.stream:
                 full_response = ""
                 for text in self.inference_engine.generate_stream(
-                    self.user_input, use_memory=True, history=self.history
+                    self.user_input, 
+                    use_memory=True, 
+                    history=self.history,
+                    mode_callback=mode_callback,
                 ):
                     if self.isInterruptionRequested():
                         break
@@ -134,7 +141,10 @@ class GenerateThread(QThread):
                 self.finished.emit(full_response)
             else:
                 response = self.inference_engine.generate(
-                    self.user_input, use_memory=True, history=self.history
+                    self.user_input, 
+                    use_memory=True, 
+                    history=self.history,
+                    mode_callback=mode_callback,
                 )
                 self.finished.emit(response)
         except Exception as e:
@@ -155,6 +165,16 @@ class ChatWidget(QWidget):
         self.current_response = ""
         self.pending_user_input = ""
         self.is_generating = False
+
+        # Cognitive mode override (None = auto-routing)
+        self._COGNITIVE_MODES = [
+            ("auto",              "Oto ✨",               "#1e3a5f", "#93c5fd"),
+            ("system_1",          "System 1 ⚡",           "#1e3a5f", "#93c5fd"),
+            ("system_2_plan",     "Plan 📝",              "#3b186e", "#d8b4fe"),
+            ("system_2_deepthink","DeepThink 🧠",         "#4a1942", "#f0abfc"),
+            ("system_2_agent",    "Agent 🤖",             "#164e28", "#86efac"),
+        ]
+        self._cog_mode_index = 0  # starts on Auto
 
         self._setup_ui()
 
@@ -310,11 +330,48 @@ class ChatWidget(QWidget):
         )
         header_layout.addWidget(self.chat_title_label)
 
+        # Second row: subtitle + cognitive mode badge
+        subtitle_row = QHBoxLayout()
+        subtitle_row.setContentsMargins(0, 0, 0, 0)
+
         self.chat_subtitle_label = QLabel("Bir mesaj yazarak sohbeti başlatın.")
         self.chat_subtitle_label.setStyleSheet(
             "QLabel { font-size: 12px; color: #94a3b8; }"
         )
-        header_layout.addWidget(self.chat_subtitle_label)
+        subtitle_row.addWidget(self.chat_subtitle_label)
+        subtitle_row.addStretch()
+
+        # Cognitive mode badge (clickable to cycle modes)
+        self._cog_badge = QPushButton("Oto ✨")
+        self._cog_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cog_badge.setStyleSheet(
+            """
+            QPushButton {
+                background: #1e3a5f;
+                color: #93c5fd;
+                border: none;
+                border-radius: 9px;
+                padding: 2px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #264a73;
+            }
+            """
+        )
+        self._cog_badge.setToolTip(
+            "Bilişsel mod seçici (tıkla değiştir):\n"
+            "Oto ✨ — Otomatik yönlendirme\n"
+            "System 1 ⚡ — Hızlı sezgisel yanıt\n"
+            "Plan 📝 — Adım adım düşünme\n"
+            "DeepThink 🧠 — Derin MCTS muhakemesi\n"
+            "Agent 🤖 — Otonom ajan modu"
+        )
+        self._cog_badge.clicked.connect(self._cycle_cognitive_mode)
+        subtitle_row.addWidget(self._cog_badge)
+
+        header_layout.addLayout(subtitle_row)
         layout.addWidget(header)
 
         self.scroll_area = QScrollArea()
@@ -529,6 +586,73 @@ class ChatWidget(QWidget):
     def set_inference_engine(self, engine: InferenceEngine) -> None:
         self.inference_engine = engine
 
+    def set_cognitive_mode(self, mode: str, simulations: int = 0) -> None:
+        """Update the cognitive mode badge to show which mode is active.
+
+        Called by the GenerateThread's mode_selected signal.
+
+        Args:
+            mode: 'system_1' | 'system_2_plan' | 'system_2_deepthink' | 'system_2_agent'
+            simulations: Number of MCTS simulations (only shown for System 2)
+        """
+        mode_labels = {
+            "system_1":           ("System 1 ⚡",      "#1e3a5f", "#93c5fd"),
+            "system_2_plan":      (f"Plan 📝 {simulations} sim.",    "#3b186e", "#d8b4fe"),
+            "system_2_deepthink": (f"DeepThink 🧠 {simulations} sim.", "#4a1942", "#f0abfc"),
+            "system_2_agent":     (f"Agent 🤖 {simulations} sim.",     "#164e28", "#86efac"),
+        }
+        label, bg, fg = mode_labels.get(mode, ("System 1 ⚡", "#1e3a5f", "#93c5fd"))
+        self._cog_badge.setText(label)
+        self._cog_badge.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {bg};
+                color: {fg};
+                border: none;
+                border-radius: 9px;
+                padding: 2px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {bg};
+                filter: brightness(1.2);
+            }}
+            """
+        )
+
+    def _cycle_cognitive_mode(self) -> None:
+        """Cycle through cognitive modes on badge click."""
+        self._cog_mode_index = (self._cog_mode_index + 1) % len(self._COGNITIVE_MODES)
+        mode_key, label, bg, fg = self._COGNITIVE_MODES[self._cog_mode_index]
+
+        self._cog_badge.setText(label)
+        self._cog_badge.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {bg};
+                color: {fg};
+                border: none;
+                border-radius: 9px;
+                padding: 2px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {bg};
+            }}
+            """
+        )
+
+        # Apply to inference engine router
+        if self.inference_engine:
+            if mode_key == "auto":
+                self.inference_engine.router.force_mode = None
+            else:
+                from src.core.cognitive.modes import CognitiveMode
+                mode_enum = CognitiveMode(mode_key)
+                self.inference_engine.router.force_mode = mode_enum
+
     def set_database(self, database: Database) -> None:
         self.database = database
         self._load_conversations_list()
@@ -633,7 +757,11 @@ class ChatWidget(QWidget):
         self.generate_thread.text_generated.connect(self._on_text_generated)
         self.generate_thread.finished.connect(self._on_generation_finished)
         self.generate_thread.error.connect(self._on_generation_error)
+        self.generate_thread.mode_selected.connect(self._on_mode_selected)
         self.generate_thread.start()
+
+    def _on_mode_selected(self, mode: str, simulations: int) -> None:
+        self.set_cognitive_mode(mode, simulations)
 
     def _on_text_generated(self, text: str) -> None:
         self.current_response += text

@@ -150,8 +150,6 @@ class DatasetLoader:
 
         return conversations
 
-        return conversations
-
     def _normalize_conversations(
         self, data: List[Dict[str, Any]]
     ) -> List[Dict[str, str]]:

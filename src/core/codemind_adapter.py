@@ -126,13 +126,31 @@ class CodeMindAdapter:
             checkpoint_config.get("max_position_embeddings", 2048)
         )
 
+        # --- GQA: read num_key_value_heads from checkpoint ---
+        # If the checkpoint was trained with full MHA (no GQA), num_key_value_heads
+        # equals num_attention_heads. We must honour that here; otherwise we build a
+        # GQA model with fewer KV dimensions than the saved weights have.
+        num_key_value_heads = int(
+            checkpoint_config.get(
+                "num_key_value_heads",
+                checkpoint_config.get("num_kv_heads", num_attention_heads),  # default = MHA
+            )
+        )
+
+        # --- MoE: read expert count from checkpoint ---
+        num_experts = int(checkpoint_config.get("num_experts", 1))
+        num_experts_per_tok = int(checkpoint_config.get("num_experts_per_tok", 1))
+
         config = CodeMindConfig(
             vocab_size=int(tokenizer_vocab_size),
             hidden_size=hidden_size,
             num_hidden_layers=num_hidden_layers,
             num_attention_heads=num_attention_heads,
+            num_key_value_heads=num_key_value_heads,
             intermediate_size=intermediate_size,
             max_position_embeddings=max_position_embeddings,
+            num_experts=num_experts,
+            num_experts_per_tok=num_experts_per_tok,
         )
         return CodeMindForCausalLM(config)
 
@@ -447,11 +465,27 @@ class CodeMindAdapter:
             )
 
         self.model.load_state_dict(filtered_state, strict=False)
-        self.model = self.model.to(self.device)
+
+        # --- CUDA OOM safety: try target device, fall back to CPU ---
+        try:
+            self.model = self.model.to(self.device)
+        except RuntimeError as oom_err:
+            if "out of memory" in str(oom_err).lower():
+                self.logger.warning(
+                    f"CUDA OOM while moving model to {self.device}. "
+                    "Falling back to CPU. Performance will be reduced."
+                )
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                self.device = "cpu"
+                self.model = self.model.to("cpu")
+            else:
+                raise
+
         self.model.eval()
         self.last_compatibility_report = report
 
-        self.logger.info(f"CodeMind compatibility check passed: {report.summary()}")
+        self.logger.info(f"CodeMind loaded on {self.device}. Compatibility: {report.summary()}")
         return self.model, self.tokenizer, report
 
     def get_model_info(self) -> Dict[str, Any]:

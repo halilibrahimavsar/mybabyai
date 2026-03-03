@@ -1,6 +1,7 @@
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from transformers import (
     AutoModelForCausalLM,
@@ -245,8 +246,15 @@ class ModelManager:
         self.logger.info(f"Sıfırdan (eğitilmemiş) CodeMind-{size} model oluşturuluyor...")
         
         # Architecture presets
+        experts = 1
+        experts_per_tok = 1
+        
         if size == "350M":
             hidden_size, layers, heads = 1024, 24, 16
+        elif size == "350M-MOE":
+            hidden_size, layers, heads = 768, 24, 12
+            experts = 8
+            experts_per_tok = 2
         elif size == "650M":
             hidden_size, layers, heads = 1280, 24, 20
         else: # Default 125M
@@ -272,7 +280,9 @@ class ModelManager:
             num_hidden_layers=layers,
             num_attention_heads=heads,
             intermediate_size=hidden_size * 4,
-            max_position_embeddings=2048
+            max_position_embeddings=4096,
+            num_experts=experts,
+            num_experts_per_tok=experts_per_tok
         )
         self.model = CodeMindForCausalLM(config)
         
@@ -345,6 +355,126 @@ class ModelManager:
 
         info["status"] = "Eğitilmiş (Fine-tuned)" if getattr(self, "is_fine_tuned", False) else "Ham (Base)"
         return info
+
+    def list_checkpoints(self) -> List[Dict[str, Any]]:
+        """Discover all checkpoints from both storage formats and return a unified list.
+        
+        Format A: codemind/checkpoints/model_*.pt (custom CodeMind format)
+        Format B: models/fine_tuned/checkpoint-*/  (HuggingFace Trainer format)
+        """
+        checkpoints: List[Dict[str, Any]] = []
+
+        # Format A: .pt files
+        pt_dir = self.config.get_path("codemind.checkpoint_dir", "codemind/checkpoints")
+        if pt_dir.exists():
+            for pt_file in sorted(pt_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True):
+                checkpoints.append({
+                    "path": str(pt_file),
+                    "name": pt_file.name,
+                    "format": "pt",
+                    "size_mb": round(pt_file.stat().st_size / (1024 * 1024), 1),
+                    "modified": pt_file.stat().st_mtime,
+                })
+
+        # Format B: HuggingFace Trainer directories
+        hf_dir = Path(self.config.get("training.output_dir", "models/fine_tuned"))
+        if hf_dir.exists():
+            # Main adapter dir itself (latest)
+            adapter_cfg = hf_dir / "adapter_config.json"
+            if adapter_cfg.exists():
+                checkpoints.append({
+                    "path": str(hf_dir),
+                    "name": f"{hf_dir.name} (LoRA aktif)",
+                    "format": "hf_lora",
+                    "size_mb": round(sum(f.stat().st_size for f in hf_dir.rglob("*") if f.is_file()) / (1024 * 1024), 1),
+                    "modified": adapter_cfg.stat().st_mtime,
+                })
+            # Numbered checkpoints inside
+            for ckpt_dir in sorted(hf_dir.glob("checkpoint-*"), key=lambda p: p.stat().st_mtime, reverse=True):
+                cfg = ckpt_dir / "adapter_config.json"
+                if cfg.exists():
+                    checkpoints.append({
+                        "path": str(ckpt_dir),
+                        "name": ckpt_dir.name,
+                        "format": "hf_lora",
+                        "size_mb": round(sum(f.stat().st_size for f in ckpt_dir.rglob("*") if f.is_file()) / (1024 * 1024), 1),
+                        "modified": cfg.stat().st_mtime,
+                    })
+
+        # Sort all by modification time, newest first
+        checkpoints.sort(key=lambda x: x["modified"], reverse=True)
+        return checkpoints
+
+    def merge_lora_into_base(self, output_dir: Optional[str] = None) -> str:
+        """Merge the active LoRA adapter into the base model weights and save as .pt file.
+        
+        This is a one-way operation that produces a stand-alone model checkpoint 
+        without any PEFT overhead. The resulting model is faster at inference time.
+        
+        Returns:
+            Path to the saved merged checkpoint file.
+        """
+        if self.model is None:
+            raise ValueError("Model yüklenmemiş. Önce bir model yükleyin.")
+
+        from peft import PeftModel
+
+        if not isinstance(self.model, PeftModel):
+            raise ValueError(
+                "Aktif LoRA adaptörü bulunamadı. Birleştirmek için önce bir LoRA adaptör yükleyin."
+            )
+
+        self.logger.info("LoRA adaptörü base model ile birleştiriliyor...")
+
+        # Merge weights in-place
+        merged_model = self.model.merge_and_unload()
+        self.model = merged_model
+        self.is_fine_tuned = False  # Now it's a merged base model
+
+        # Determine output path
+        ckpt_dir = self.config.get_path("codemind.checkpoint_dir", "codemind/checkpoints")
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = int(time.time())
+        save_path = Path(output_dir) if output_dir else ckpt_dir / f"model_merged_{timestamp}.pt"
+
+        # Build checkpoint dict with metadata
+        from src.core.checkpointing import build_checkpoint_metadata, attach_checkpoint_metadata
+        state_dict = self.model.state_dict()
+        checkpoint: Dict[str, Any] = {"model_state_dict": state_dict}
+
+        config_data = getattr(getattr(self.model, "config", None), "to_dict", lambda: {})() if self.model else {}
+        metadata = build_checkpoint_metadata(
+            model_config=config_data,
+            tokenizer=self.tokenizer,
+            tokenizer_type="codemind",
+            architecture_version="codemind-v2-merged",
+        )
+        checkpoint = attach_checkpoint_metadata(checkpoint, metadata)
+        torch.save(checkpoint, save_path)
+
+        self.logger.info(f"Birleştirilmiş model kaydedildi: {save_path}")
+        return str(save_path)
+
+    def trigger_night_shift(
+        self,
+        background: bool = True,
+        memory_manager: Optional[Any] = None,
+        trainer: Optional[Any] = None,
+    ) -> None:
+        """Trigger the NightShift continuous learning pipeline.
+        
+        Loads NightShift on demand and starts the background fine-tune loop
+        that distills successful System 2 experiences into System 1.
+        """
+        from src.core.cognitive.continuous_learning import NightShift
+
+        if memory_manager is None or trainer is None:
+            self.logger.warning("NightShift için MemoryManager ve LoRATrainer gerekli. Atlanıyor.")
+            return
+
+        ns = NightShift(memory_manager=memory_manager, trainer=trainer)
+        self.logger.info(f"NightShift başlatılıyor (arka plan={background})...")
+        ns.start_night_shift(background=background)
 
     def unload_model(self) -> None:
         if self.is_codemind and self.codemind_adapter:

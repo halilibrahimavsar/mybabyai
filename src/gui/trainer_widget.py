@@ -1,35 +1,46 @@
-import os
-import sys
+"""
+Training Studio — redesigned as a single tab-free page.
+
+Layout:
+  ┌─ Header ─────────────────────────────────────────────────────┐
+  ├─ Body ────────────────────────────────────────────────────────┤
+  │  Left panel (35%)           Right panel (65%)                │
+  │  ─ Dataset Pool             ─ Live Loss Graph                │
+  │  ─ Hyperparameters          ─ Metric cards                   │
+  │                             ─ Log (collapsible)              │
+  ├─ Bottom toolbar ─────────────────────────────────────────────┤
+  │  [Başlat] [Duraklat] [Durdur]   Step ETA GPU               │
+  └───────────────────────────────────────────────────────────────┘
+"""
+
+from __future__ import annotations
+
+import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
+
+import torch
+from PyQt6.QtCore import Qt, QThread, QTimer, QPointF, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QPushButton,
-    QTextEdit,
-    QLineEdit,
-    QSpinBox,
-    QDoubleSpinBox,
-    QGroupBox,
-    QProgressBar,
-    QFileDialog,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QTabWidget,
-    QFormLayout,
-    QDialog,
-    QComboBox,
-    QDialogButtonBox,
-    QProgressDialog,
-    QFrame,
-    QCheckBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QDoubleSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF
-from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
-
 
 from src.utils.config import Config
 from src.utils.logger import get_logger
@@ -37,15 +48,151 @@ from src.core.trainer import LoRATrainer
 from src.data.database import Database
 from src.data.dataset_loader import DatasetLoader
 from src.data.dataset_downloader import DatasetDownloader
-
-
-from src.gui.widgets.stats_dashboard import StatsDashboard
 from src.gui.dialogs.download_dialog import DownloadDatasetDialog, DownloadThread
-from src.gui.threads.training_thread import TrainingThread
 from src.gui.dialogs.crawl_dialog import CrawlURLDialog
+from src.gui.threads.training_thread import TrainingThread
 
+
+# ---------------------------------------------------------------------------
+# Mini live-loss graph widget
+# ---------------------------------------------------------------------------
+
+class LossGraph(QWidget):
+    """Simple polyline loss graph rendered with QPainter."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._losses: List[float] = []
+        self.setMinimumHeight(200)
+        self.setStyleSheet("background: transparent;")
+
+    def add_loss(self, loss: float) -> None:
+        self._losses.append(loss)
+        # Keep last 300 points to avoid unbounded growth
+        if len(self._losses) > 300:
+            self._losses = self._losses[-300:]
+        self.update()
+
+    def reset(self) -> None:
+        self._losses = []
+        self.update()
+
+    # ---- painEvent ----
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        if not self._losses:
+            painter = QPainter(self)
+            painter.setPen(QPen(QColor("#334155")))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Eğitim başladığında grafik burada görünecek")
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        pad_l, pad_r, pad_t, pad_b = 46, 12, 12, 28
+
+        # Grid
+        grid_pen = QPen(QColor("#1a2235"))
+        grid_pen.setWidth(1)
+        painter.setPen(grid_pen)
+        for i in range(1, 5):
+            y = pad_t + (h - pad_t - pad_b) * i // 4
+            painter.drawLine(pad_l, y, w - pad_r, y)
+
+        # Y axis labels
+        min_loss = min(self._losses)
+        max_loss = max(self._losses)
+        if max_loss == min_loss:
+            max_loss = min_loss + 0.01
+
+        label_pen = QPen(QColor("#475569"))
+        painter.setPen(label_pen)
+        painter.setFont(painter.font())
+        for i in range(5):
+            val = max_loss - (max_loss - min_loss) * i / 4
+            y = pad_t + (h - pad_t - pad_b) * i // 4
+            painter.drawText(0, y - 8, pad_l - 4, 16, Qt.AlignmentFlag.AlignRight, f"{val:.3f}")
+
+        # Loss polyline
+        pts: List[QPointF] = []
+        n = len(self._losses)
+        for i, loss in enumerate(self._losses):
+            x = pad_l + (w - pad_l - pad_r) * i / max(n - 1, 1)
+            y = pad_t + (h - pad_t - pad_b) * (1 - (loss - min_loss) / (max_loss - min_loss))
+            pts.append(QPointF(x, y))
+
+        line_pen = QPen(QColor("#3b82f6"))
+        line_pen.setWidth(2)
+        painter.setPen(line_pen)
+        if len(pts) > 1:
+            for i in range(len(pts) - 1):
+                painter.drawLine(pts[i], pts[i + 1])
+
+
+# ---------------------------------------------------------------------------
+# Dataset Chip
+# ---------------------------------------------------------------------------
+
+class DatasetChip(QFrame):
+    """A removable chip representing one dataset in the pool."""
+
+    remove_requested = pyqtSignal(object)  # self
+
+    _ICONS = {"hf": "🤗", "file": "📁", "url": "🌐", "conversations": "💬"}
+
+    def __init__(self, dataset: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.dataset = dataset
+        self.setFixedHeight(40)
+        self.setStyleSheet("""
+            QFrame {
+                background: #1e3a5f;
+                border: 1px solid #2563eb;
+                border-radius: 20px;
+            }
+        """)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 6, 0)
+        lay.setSpacing(6)
+
+        icon = self._ICONS.get(dataset.get("type", "file"), "📄")
+        lbl = QLabel(f"{icon} {dataset.get('name', 'Veri Seti')[:28]}")
+        lbl.setStyleSheet("font-size: 12px; color: #bfdbfe;")
+        lay.addWidget(lbl, 1)
+
+        count_str = ""
+        if "samples" in dataset:
+            count_str = f"  {dataset['samples']:,} örnek"
+        if count_str:
+            cnt = QLabel(count_str)
+            cnt.setStyleSheet("font-size: 11px; color: #93c5fd;")
+            lay.addWidget(cnt)
+
+        rm = QPushButton("×")
+        rm.setFixedSize(22, 22)
+        rm.setCursor(Qt.CursorShape.PointingHandCursor)
+        rm.setStyleSheet("""
+            QPushButton {
+                background: #1e40af;
+                color: #93c5fd;
+                border-radius: 11px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0;
+            }
+            QPushButton:hover { background: #dc2626; color: #fca5a5; }
+        """)
+        rm.clicked.connect(lambda: self.remove_requested.emit(self))
+        lay.addWidget(rm)
+
+
+# ---------------------------------------------------------------------------
+# Training Studio
+# ---------------------------------------------------------------------------
 
 class TrainerWidget(QWidget):
+    """The main Training Studio page."""
+
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
         self.main_window = main_window
@@ -58,834 +205,612 @@ class TrainerWidget(QWidget):
         self.dataset_downloader = DatasetDownloader()
         self.training_thread: Optional[TrainingThread] = None
         self.download_thread: Optional[DownloadThread] = None
-        self.dataset_pool: List[Dict[str, Any]] = []
 
-        self._load_search_results: List[Dict[str, Any]] = []
+        self.dataset_pool: List[Dict[str, Any]] = []
+        self._chip_widgets: List[DatasetChip] = []
+        self._is_training = False
+        self._start_time: Optional[float] = None
 
         self._setup_ui()
 
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-
-        title = QLabel("🎯 Model Eğitimi")
-        title.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 20px;")
-        layout.addWidget(title)
-
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-                background-color: #252525;
-            }
-            QTabBar::tab {
-                background-color: #3d3d3d;
-                padding: 10px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-            }
-            QTabBar::tab:selected {
-                background-color: #6366f1;
-            }
-        """)
-
-        data_tab = self._create_data_tab()
-        tabs.addTab(data_tab, "📁 Veri")
-
-        config_tab = self._create_config_tab()
-        tabs.addTab(config_tab, "⚙️ Yapılandırma")
-
-        # Auto-enable resume if model is already fine-tuned
-        if hasattr(self.main_window, "model_manager") and getattr(self.main_window.model_manager, "is_fine_tuned", False):
-            self.resume_check.setChecked(True)
-            self.logger.info("Mevcut fine-tuned model tespit edildi, 'Resume' otomatik aktifleştirildi.")
-
-        monitor_tab = self._create_monitor_tab()
-        tabs.addTab(monitor_tab, "📊 İlerleme")
-
-        stats_tab = self._create_stats_tab()
-        tabs.addTab(stats_tab, "📈 Grafikler")
-
-        layout.addWidget(tabs)
-
-    def _create_data_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        load_group = QGroupBox("Veri Yükle & Kaynak")
-        load_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 15px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-        load_layout = QVBoxLayout(load_group)
-
-        # Mode Selection
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("📂 Veri Tipi:"))
-        self.data_type_combo = QComboBox()
-        self.data_type_combo.addItem("💬 Karşılıklı Konuşma (JSON/JSONL/CSV)", "conversations")
-        self.data_type_combo.addItem("📄 Düz Metin (TXT/MD/Web)", "texts")
-        self.data_type_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #3d3d3d;
-                border-radius: 5px;
-                padding: 5px;
-                min-width: 250px;
-            }
-        """)
-        mode_layout.addWidget(self.data_type_combo)
-        mode_layout.addStretch()
-        load_layout.addLayout(mode_layout)
-
-        # Quick Source Selection
-        quick_layout = QHBoxLayout()
-        quick_layout.addWidget(QLabel("🚀 Hızlı Kaynak:"))
-        self.quick_source_combo = QComboBox()
-        self.quick_source_combo.addItem("--- Manuel Seçim ---", None)
-        
-        # --- CATEGORY: WEB ---
-        self.quick_source_combo.addItem("🌐 [WEB] Wikipedia (Türkçe)", {"type": "url", "data": ["https://tr.wikipedia.org/wiki/Yapay_zeka", "https://tr.wikipedia.org/wiki/Makine_öğrenimi"]})
-        self.quick_source_combo.addItem("🌐 [WEB] Wikipedia (İngilizce)", {"type": "url", "data": ["https://en.wikipedia.org/wiki/Artificial_intelligence", "https://en.wikipedia.org/wiki/Machine_learning"]})
-        
-        # --- CATEGORY: TURKISH ---
-        self.quick_source_combo.addItem("📚 [TR] Kaliteli Talimatlar (merve)", {"type": "dataset", "data": "turkish_instructions_merve"})
-        self.quick_source_combo.addItem("📚 [TR] Alpaca Çeviri Seti", {"type": "dataset", "data": "turkish_alpaca"})
-        self.quick_source_combo.addItem("📚 [TR] Çeşitli Görevler", {"type": "dataset", "data": "tr_instruction_dataset"})
-        self.quick_source_combo.addItem("📰 [TR] Haberler (Resmi Dil)", {"type": "dataset", "data": "turkish_news_70k"})
-        self.quick_source_combo.addItem("🌐 [TR] Devasa Web Kültürü (Örnek)", {"type": "dataset", "data": "culturax_tr_sample"})
-
-        # --- CATEGORY: ENGLISH ---
-        self.quick_source_combo.addItem("📚 [EN] SlimOrca (GPT-4)", {"type": "dataset", "data": "slim_orca"})
-        self.quick_source_combo.addItem("💬 [EN] UltraChat 200k", {"type": "dataset", "data": "ultrachat_200k"})
-        self.quick_source_combo.addItem("📚 [EN] Dolly 15k (Temiz)", {"type": "dataset", "data": "dolly_15k"})
-        self.quick_source_combo.addItem("📚 [EN] WizardLM (Zor Mantık)", {"type": "dataset", "data": "wizardlm_70k"})
-        self.quick_source_combo.addItem("🧮 [EN] GSM8K (Matematik)", {"type": "dataset", "data": "gsm8k_math"})
-        
-        # --- CATEGORY: CODE & OTHER ---
-        self.quick_source_combo.addItem("💻 [CODE] CodeAlpaca 20k", {"type": "dataset", "data": "code_alpaca_20k"})
-        self.quick_source_combo.addItem("🐍 [CODE] Python Talimatları", {"type": "dataset", "data": "python_instructions"})
-        self.quick_source_combo.addItem("💙 [CODE] Flutter/Dart Stack", {"type": "dataset", "data": "flutter_dart_stack"})
-        self.quick_source_combo.addItem("🎭 [TEXT] Tiny Shakespeare", {"type": "dataset", "data": "tiny_shakespeare"})
-        self.quick_source_combo.addItem("🔄 [LANG] EN-TR Paralel Veri", {"type": "dataset", "data": "en_tr_parallel"})
-        
-        # --- CATEGORY: ARCHIVES ---
-        self.quick_source_combo.addItem("📦 [ZIP] Örnek Zip Dosyası", {"type": "dataset", "data": "sample_archive_zip"})
-        self.quick_source_combo.addItem("📦 [TAR] Örnek Tar.GZ Dosyası", {"type": "dataset", "data": "turkish_sample_archive"})
-
-        self.quick_source_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 5px;
-                padding: 5px;
-                min-width: 300px;
-                color: #e2e8f0;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1e293b;
-                color: #e2e8f0;
-                selection-background-color: #334155;
-            }
-        """)
-        self.quick_source_combo.currentIndexChanged.connect(self._on_quick_source_changed)
-        quick_layout.addWidget(self.quick_source_combo)
-        quick_layout.addStretch()
-        load_layout.addLayout(quick_layout)
-
-        btn_layout = QHBoxLayout()
-
-        load_file_btn = QPushButton("📄 Dosyadan Yükle")
-        load_file_btn.clicked.connect(self._load_from_file)
-        load_file_btn.setStyleSheet(self._button_style())
-        btn_layout.addWidget(load_file_btn)
-
-        load_dir_btn = QPushButton("📁 Dizinden Yükle")
-        load_dir_btn.clicked.connect(self._load_from_directory)
-        load_dir_btn.setStyleSheet(self._button_style())
-        btn_layout.addWidget(load_dir_btn)
-
-        download_btn = QPushButton("⬇️ Veriseti İndir")
-        download_btn.clicked.connect(self._open_download_dialog)
-        download_btn.setStyleSheet(self._button_style("#8b5cf6"))
-        btn_layout.addWidget(download_btn)
-
-        crawl_btn = QPushButton("🌐 Web'den Çek")
-        crawl_btn.clicked.connect(self._open_crawl_dialog)
-        crawl_btn.setStyleSheet(self._button_style("#06b6d4"))
-        btn_layout.addWidget(crawl_btn)
-
-        clear_btn = QPushButton("🗑️ Havuzu Temizle")
-        clear_btn.clicked.connect(self._clear_dataset)
-        clear_btn.setStyleSheet(self._button_style("#ef4444"))
-        btn_layout.addWidget(clear_btn)
-
-        load_layout.addLayout(btn_layout)
-
-        self.dataset_stats_label = QLabel("Yüklenen toplam veri: 0 kayıt")
-        self.dataset_stats_label.setStyleSheet("padding: 10px; color: #888;")
-        load_layout.addWidget(self.dataset_stats_label)
-
-        layout.addWidget(load_group)
-
-        preview_group = QGroupBox("Veri Havuzu & Önizleme")
-        preview_group.setStyleSheet(load_group.styleSheet())
-        preview_layout = QVBoxLayout(preview_group)
-
-        self.pool_list = QListWidget()
-        self.pool_list.setStyleSheet("""
-            QListWidget {
-                background-color: #1e1e1e;
-                border: 1px solid #3d3d3d;
-                border-radius: 5px;
-                max-height: 100px;
-            }
-        """)
-        preview_layout.addWidget(self.pool_list)
-
-        pool_btn_layout = QHBoxLayout()
-        self.remove_pool_btn = QPushButton("❌ Seçili Olanı Çıkar")
-        self.remove_pool_btn.clicked.connect(self._remove_from_pool)
-        self.remove_pool_btn.setStyleSheet(self._button_style("#ef4444"))
-        pool_btn_layout.addWidget(self.remove_pool_btn)
-        pool_btn_layout.addStretch()
-        preview_layout.addLayout(pool_btn_layout)
-
-        preview_layout.addWidget(QLabel("Son Eklenen Veri Önizleme (İlk 50 Kayıt):"))
-
-        self.preview_list = QListWidget()
-        self.preview_list.setStyleSheet("""
-            QListWidget {
-                background-color: #1e1e1e;
-                border: 1px solid #3d3d3d;
-                border-radius: 5px;
-            }
-        """)
-        preview_layout.addWidget(self.preview_list)
-
-        layout.addWidget(preview_group)
-
-        return widget
-
-    def _create_config_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        form_group = QGroupBox("Eğitim Parametreleri")
-        form_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
-        form_layout = QFormLayout(form_group)
-
-        self.training_type_combo = QComboBox()
-        self.training_type_combo.addItem("LoRA (Hızlı & Düşük Bellek)", "lora")
-        self.training_type_combo.addItem("Full (Tüm Ağırlıklar)", "full")
-        self.training_type_combo.setToolTip("LoRA ile hızlı ince ayar veya tam parametre eğitimi seçin.")
-        
-        # Status label for warnings
-        self.training_type_warning = QLabel("")
-        self.training_type_warning.setStyleSheet("color: #ff9800; font-size: 11px;")
-        
-        # Check load_in_4bit status dynamically if possible
-        is_4bit = self.config.get("model.load_in_4bit", False)
-        if hasattr(self.main_window, "model_manager") and self.main_window.model_manager and self.main_window.model_manager.model:
-            is_4bit = getattr(self.main_window.model_manager, "load_in_4bit", is_4bit)
-
-        if is_4bit:
-            self.training_type_combo.setItemData(1, 0, Qt.ItemDataRole.UserRole - 1) # Disables item
-            self.training_type_combo.setToolTip("4-bit quantizasyon aktifken Full Training yapılamaz.")
-            self.training_type_warning.setText("⚠️ 4-bit aktif: Sadece LoRA desteklenir.")
-            
-        form_layout.addRow("Eğitim Türü:", self.training_type_combo)
-        form_layout.addRow("", self.training_type_warning)
-
-        # Connect change to uncheck resume
-        self.training_type_combo.currentIndexChanged.connect(
-            self._on_training_type_changed
-        )
-
-        self.epochs_spin = QSpinBox()
-        self.epochs_spin.setRange(1, 100)
-        self.epochs_spin.setValue(self.config.get("training.num_train_epochs", 3))
-        form_layout.addRow("Epoch Sayısı:", self.epochs_spin)
-
-        self.batch_size_spin = QSpinBox()
-        self.batch_size_spin.setRange(1, 32)
-        self.batch_size_spin.setValue(
-            self.config.get("training.per_device_train_batch_size", 8)
-        )
-        form_layout.addRow("Batch Size:", self.batch_size_spin)
-
-        self.grad_accum_spin = QSpinBox()
-        self.grad_accum_spin.setRange(1, 16)
-        self.grad_accum_spin.setValue(
-            self.config.get("training.gradient_accumulation_steps", 2)
-        )
-        form_layout.addRow("Gradient Accumulation:", self.grad_accum_spin)
-
-        self.lr_spin = QDoubleSpinBox()
-        self.lr_spin.setRange(0.00001, 0.1)
-        self.lr_spin.setDecimals(5)
-        self.lr_spin.setValue(self.config.get("training.learning_rate", 2e-4))
-        form_layout.addRow("Learning Rate:", self.lr_spin)
-
-        self.warmup_spin = QSpinBox()
-        self.warmup_spin.setRange(0, 1000)
-        self.warmup_spin.setValue(self.config.get("training.warmup_steps", 100))
-        form_layout.addRow("Warmup Steps:", self.warmup_spin)
-
-        self.max_length_spin = QSpinBox()
-        self.max_length_spin.setRange(64, 4096)
-        self.max_length_spin.setSingleStep(64)
-        self.max_length_spin.setValue(
-            self.config.get(
-                "training.max_length",
-                self.config.get("memory.chunk_size", 512),
-            )
-        )
-        form_layout.addRow("Max Sequence Length:", self.max_length_spin)
-
-        self.pack_sequences_check = QCheckBox("Enable Sequence Packing")
-        self.pack_sequences_check.setChecked(
-            self.config.get("training.pack_sequences", True)
-        )
-        form_layout.addRow("Packing:", self.pack_sequences_check)
-
-        self.output_dir_edit = QLineEdit(
-            self.config.get("training.output_dir", "models/fine_tuned")
-        )
-        form_layout.addRow("Çıktı Dizini:", self.output_dir_edit)
-
-        self.resume_check = QCheckBox("Kaldığı Yerden Devam Et (Resume)")
-        self.resume_check.setChecked(False)
-        self.resume_check.setToolTip("Eğer bu klasörde daha önce bir eğitim yapıldıysa en son checkpoint'ten devam eder.")
-        form_layout.addRow("Devam Et:", self.resume_check)
-
-        layout.addWidget(form_group)
-
-        lora_group = QGroupBox("LoRA Parametreleri")
-        lora_group.setStyleSheet(form_group.styleSheet())
-        lora_layout = QFormLayout(lora_group)
-
-        self.lora_r_spin = QSpinBox()
-        self.lora_r_spin.setRange(1, 128)
-        self.lora_r_spin.setValue(self.config.get("model.lora.r", 16))
-        lora_layout.addRow("LoRA r:", self.lora_r_spin)
-
-        self.lora_alpha_spin = QSpinBox()
-        self.lora_alpha_spin.setRange(1, 256)
-        self.lora_alpha_spin.setValue(self.config.get("model.lora.lora_alpha", 32))
-        lora_layout.addRow("LoRA Alpha:", self.lora_alpha_spin)
-
-        self.lora_dropout_spin = QDoubleSpinBox()
-        self.lora_dropout_spin.setRange(0.0, 0.5)
-        self.lora_dropout_spin.setDecimals(2)
-        self.lora_dropout_spin.setValue(
-            self.config.get("model.lora.lora_dropout", 0.05)
-        )
-        lora_layout.addRow("LoRA Dropout:", self.lora_dropout_spin)
-
-        layout.addWidget(lora_group)
-
-        layout.addStretch()
-
-        return widget
-
-    def _create_monitor_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        progress_group = QGroupBox("Eğitim İlerlemesi")
-        progress_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
-        progress_layout = QVBoxLayout(progress_group)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #3d3d3d;
-                border-radius: 5px;
-                text-align: center;
-                height: 25px;
-            }
-            QProgressBar::chunk {
-                background-color: #6366f1;
-                border-radius: 5px;
-            }
-        """)
-        progress_layout.addWidget(self.progress_bar)
-
-        self.progress_label = QLabel("Eğitim başlatılmadı")
-        self.progress_label.setStyleSheet("padding: 10px; font-size: 14px;")
-        progress_layout.addWidget(self.progress_label)
-        
-        import torch
-        import psutil
-        device_type = "CPU"
-        if torch.cuda.is_available():
-            device_type = f"GPU ({torch.cuda.get_device_name(0)})"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device_type = "MPS (Apple Silicon)"
-            
-        ram_total = psutil.virtual_memory().total / (1024**3)
-        cpu_cores = psutil.cpu_count(logical=False)
-
-        self.hw_info_label = QLabel(f"🖥️ Donanım: {device_type} | Toplam RAM: {ram_total:.1f} GB | CPU Çekirdekleri: {cpu_cores}")
-        self.hw_info_label.setStyleSheet("padding: 5px 10px; font-size: 13px; color: #6366f1; font-weight: bold;")
-        progress_layout.addWidget(self.hw_info_label)
-
-        self.sys_stats_label = QLabel("Sistem: CPU 0% | RAM 0% | GPU 0 GB")
-        self.sys_stats_label.setStyleSheet("padding: 5px 10px; font-size: 13px; color: #a8a8a8;")
-        progress_layout.addWidget(self.sys_stats_label)
-
-        layout.addWidget(progress_group)
-
-        log_group = QGroupBox("Eğitim Günlüğü")
-        log_group.setStyleSheet(progress_group.styleSheet())
-        log_layout = QVBoxLayout(log_group)
-
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                border: 1px solid #3d3d3d;
-                border-radius: 5px;
-                font-family: monospace;
-            }
-        """)
-        log_layout.addWidget(self.log_text)
-
-        layout.addWidget(log_group)
-
-        btn_layout = QHBoxLayout()
-
-        self.start_btn = QPushButton("▶️ Eğitimi Başlat")
-        self.start_btn.clicked.connect(self._start_training)
-        self.start_btn.setStyleSheet(self._button_style("#10b981"))
-        btn_layout.addWidget(self.start_btn)
-
-        self.stop_btn = QPushButton("⏹️ Durdur")
-        self.stop_btn.clicked.connect(self._stop_training)
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet(self._button_style("#ef4444"))
-        btn_layout.addWidget(self.stop_btn)
-
-        self.save_ckpt_btn = QPushButton("💾 Checkpoint Kaydet")
-        self.save_ckpt_btn.clicked.connect(self._save_checkpoint)
-        self.save_ckpt_btn.setEnabled(False)
-        self.save_ckpt_btn.setStyleSheet(self._button_style("#3b82f6"))
-        btn_layout.addWidget(self.save_ckpt_btn)
-
-        layout.addLayout(btn_layout)
-
-        return widget
-
-    def _create_stats_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        self.stats_dashboard = StatsDashboard()
-        layout.addWidget(self.stats_dashboard)
-
-        # LR Plot or other info could go here
-        info_label = QLabel("Mavi çizgi: Loss (Kayıp) değerini gösterir.\nGrafik eğitim ilerledikçe güncellenir.")
-        info_label.setStyleSheet("color: #888; padding: 10px;")
-        layout.addWidget(info_label)
-
-        layout.addStretch()
-        return widget
-
-    def _button_style(self, color: str = "#6366f1") -> str:
-        return f"""
-            QPushButton {{
-                background-color: {color};
-                border: none;
-                border-radius: 8px;
-                padding: 10px 20px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {color}dd;
-            }}
-            QPushButton:disabled {{
-                background-color: #4d4d4d;
-            }}
-        """
-
-    def _save_checkpoint(self):
-        if not self.trainer:
-            return
-            
-        try:
-            self._log("Manuel olarak model checkpoint'i kaydediliyor...")
-            from src.core.checkpointing import build_checkpoint_metadata, attach_checkpoint_metadata
-            import torch
-            import time
-            
-            checkpoint_dir = self.config.get_path("codemind.checkpoint_dir", "codemind/checkpoints")
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            
-            state_dict = self.main_window.model_manager.model.state_dict()
-            checkpoint = {"model_state_dict": state_dict}
-            
-            config_dict = getattr(self.main_window.model_manager.model, "config", None)
-            config_data = config_dict.to_dict() if config_dict else {}
-            
-            metadata = build_checkpoint_metadata(
-                model_config=config_data,
-                tokenizer=self.main_window.model_manager.tokenizer,
-                tokenizer_type="pretrained",
-                architecture_version="codemind-v2"
-            )
-            checkpoint = attach_checkpoint_metadata(checkpoint, metadata)
-            
-            timestamp = int(time.time())
-            path = checkpoint_dir / f"model_manual_{timestamp}.pt"
-            torch.save(checkpoint, path)
-            
-            self._log(f"Checkpoint başarıyla kaydedildi: {path.name}")
-        except Exception as e:
-            self._log(f"Checkpoint kaydedilemedi: {e}")
+    # -----------------------------------------------------------------------
+    # Dependency injection
+    # -----------------------------------------------------------------------
 
     def set_trainer(self, trainer: LoRATrainer) -> None:
         self.trainer = trainer
-        self.save_ckpt_btn.setEnabled(True)
 
-    def set_database(self, database: Database) -> None:
-        self.database = database
+    def set_database(self, db: Database) -> None:
+        self.database = db
 
-    def _on_quick_source_changed(self) -> None:
-        source_data = self.quick_source_combo.currentData()
-        if not source_data:
+    # -----------------------------------------------------------------------
+    # UI
+    # -----------------------------------------------------------------------
+
+    def _setup_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Header ──
+        header = QFrame()
+        header.setFixedHeight(62)
+        header.setStyleSheet("QFrame { background: #0d1424; border-bottom: 1px solid #1a2235; }")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(20, 0, 20, 0)
+        h_lay.addWidget(QLabel("🎯  Eğitim Stüdyosu", styleSheet="font-size: 18px; font-weight: 700; color: #e2e8f0;"))
+        h_lay.addStretch()
+
+        self._phase_badge = QLabel("Hazır")
+        self._phase_badge.setStyleSheet("""
+            QLabel {
+                background: #1e3a5f;
+                color: #93c5fd;
+                border-radius: 10px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+        """)
+        h_lay.addWidget(self._phase_badge)
+        root.addWidget(header)
+
+        # ── Body (left + right) ──
+        body_scroll = QScrollArea()
+        body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setStyleSheet("QScrollArea { background: #0a0f1e; }")
+
+        body = QWidget()
+        body.setStyleSheet("background: #0a0f1e;")
+        body_lay = QHBoxLayout(body)
+        body_lay.setContentsMargins(16, 16, 16, 16)
+        body_lay.setSpacing(16)
+
+        body_lay.addLayout(self._build_left_panel(), 35)
+        body_lay.addLayout(self._build_right_panel(), 65)
+
+        body_scroll.setWidget(body)
+        root.addWidget(body_scroll, 1)
+
+        # ── Bottom toolbar ──
+        root.addWidget(self._build_toolbar())
+
+    # -------------------------------------------------------------------
+
+    def _build_left_panel(self) -> QVBoxLayout:
+        lay = QVBoxLayout()
+        lay.setSpacing(14)
+
+        # ─ Dataset Pool ─
+        pool_frame = QFrame()
+        pool_frame.setStyleSheet(self._frame_style())
+        pf = QVBoxLayout(pool_frame)
+        pf.setContentsMargins(14, 14, 14, 14)
+        pf.setSpacing(10)
+
+        pool_header = QHBoxLayout()
+        pool_header.addWidget(QLabel("Veri Havuzu", styleSheet="font-size: 14px; font-weight: 700; color: #e2e8f0;"))
+        pool_header.addStretch()
+        self._pool_count = QLabel("0 veri seti")
+        self._pool_count.setStyleSheet("font-size: 11px; color: #64748b;")
+        pool_header.addWidget(self._pool_count)
+        pf.addLayout(pool_header)
+
+        # Chips scroll area
+        chip_scroll = QScrollArea()
+        chip_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        chip_scroll.setWidgetResizable(True)
+        chip_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        chip_scroll.setFixedHeight(190)
+
+        self._chips_container = QWidget()
+        self._chips_container.setStyleSheet("background: transparent;")
+        self._chips_layout = QVBoxLayout(self._chips_container)
+        self._chips_layout.setContentsMargins(0, 0, 0, 0)
+        self._chips_layout.setSpacing(6)
+        self._chips_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._empty_pool_lbl = QLabel("Henüz veri seti eklenmedi.\nAşağıdaki butonlarla ekleyin.")
+        self._empty_pool_lbl.setStyleSheet("font-size: 12px; color: #475569;")
+        self._empty_pool_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._chips_layout.addWidget(self._empty_pool_lbl)
+
+        chip_scroll.setWidget(self._chips_container)
+        pf.addWidget(chip_scroll, 1)
+
+        # Add dataset buttons
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        for label, slot in [
+            ("📁 Dosya", self._add_file_dataset),
+            ("🤗 HF", self._add_hf_dataset),
+            ("💬 Sohbet", self._add_conversations_dataset),
+        ]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(32)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._btn_style("#1e3a5f"))
+            btn.clicked.connect(slot)
+            add_row.addWidget(btn)
+        pf.addLayout(add_row)
+
+        add_row2 = QHBoxLayout()
+        add_row2.setSpacing(6)
+        for label, slot in [
+            ("🌐 URL", self._add_url_dataset),
+            ("🗑 Havuzu Temizle", self._clear_pool),
+        ]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(32)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._btn_style("#374151"))
+            btn.clicked.connect(slot)
+            add_row2.addWidget(btn)
+        pf.addLayout(add_row2)
+
+        lay.addWidget(pool_frame)
+
+        # ─ Hyperparameters ─
+        hp_frame = QFrame()
+        hp_frame.setStyleSheet(self._frame_style())
+        hf = QVBoxLayout(hp_frame)
+        hf.setContentsMargins(14, 14, 14, 14)
+        hf.setSpacing(10)
+        hf.addWidget(QLabel("Hiperparametreler", styleSheet="font-size: 14px; font-weight: 700; color: #e2e8f0;"))
+
+        def _row(label: str, widget: QWidget) -> QHBoxLayout:
+            r = QHBoxLayout()
+            lbl = QLabel(label)
+            lbl.setStyleSheet("font-size: 12px; color: #94a3b8; min-width: 100px;")
+            r.addWidget(lbl)
+            r.addWidget(widget, 1)
+            return r
+
+        def _spin(lo, hi, val, step=1) -> QSpinBox:
+            s = QSpinBox()
+            s.setRange(lo, hi)
+            s.setValue(val)
+            s.setSingleStep(step)
+            s.setStyleSheet(self._spinbox_style())
+            return s
+
+        def _dspin(lo, hi, val, decimals=4) -> QDoubleSpinBox:
+            s = QDoubleSpinBox()
+            s.setRange(lo, hi)
+            s.setValue(val)
+            s.setDecimals(decimals)
+            s.setStyleSheet(self._spinbox_style())
+            return s
+
+        # Training type selector
+        self._training_type_combo = QComboBox()
+        self._training_type_combo.addItem("LoRA (Verimli)", "lora")
+        self._training_type_combo.addItem("Full (Tam Parametre)", "full")
+        self._training_type_combo.setStyleSheet(self._spinbox_style())
+        self._training_type_combo.currentIndexChanged.connect(self._on_training_type_changed)
+
+        self._epochs_spin = _spin(1, 100, self.config.get("training.num_epochs", 3))
+        self._batch_spin = _spin(1, 32, self.config.get("training.batch_size", 4))
+        self._lr_dspin = _dspin(0.00001, 0.1, self.config.get("training.learning_rate", 2e-4))
+        self._lora_r_spin = _spin(1, 128, self.config.get("model.lora.r", 16))
+        self._max_steps_spin = _spin(-1, 100000, self.config.get("training.max_steps", -1))
+
+        for lbl, wgt in [
+            ("Eğitim Tipi", self._training_type_combo),
+            ("Epoch", self._epochs_spin),
+            ("Batch Boyutu", self._batch_spin),
+            ("Öğr. Hızı", self._lr_dspin),
+            ("LoRA Rank (r)", self._lora_r_spin),
+            ("Maks. Adım (-1=∞)", self._max_steps_spin),
+        ]:
+            hf.addLayout(_row(lbl, wgt))
+
+        lay.addWidget(hp_frame)
+        lay.addStretch()
+        return lay
+
+    # -------------------------------------------------------------------
+
+    def _build_right_panel(self) -> QVBoxLayout:
+        lay = QVBoxLayout()
+        lay.setSpacing(14)
+
+        # ─ Metric cards ─
+        cards = QHBoxLayout()
+        cards.setSpacing(10)
+
+        def _mcard(title: str, init: str, accent: str) -> Tuple[QFrame, QLabel]:
+            f = QFrame()
+            f.setStyleSheet(f"""
+                QFrame {{
+                    background: #0f172a;
+                    border: 1px solid #1e3a5f;
+                    border-left: 3px solid {accent};
+                    border-radius: 10px;
+                }}
+            """)
+            fl = QVBoxLayout(f)
+            fl.setContentsMargins(12, 8, 12, 8)
+            fl.setSpacing(2)
+            t = QLabel(title)
+            t.setStyleSheet("font-size: 11px; color: #475569;")
+            fl.addWidget(t)
+            v = QLabel(init)
+            v.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {accent};")
+            fl.addWidget(v)
+            return f, v
+
+        self._loss_card, self._loss_val = _mcard("Loss", "—", "#3b82f6")
+        self._step_card, self._step_val = _mcard("Adım", "0 / —", "#8b5cf6")
+        self._eta_card, self._eta_val = _mcard("Tahmini Süre", "—", "#06b6d4")
+        self._gpu_card, self._gpu_val = _mcard("GPU Belleği", "— GB", "#22c55e")
+
+        for c in [self._loss_card, self._step_card, self._eta_card, self._gpu_card]:
+            c.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            c.setFixedHeight(72)
+            cards.addWidget(c)
+        lay.addLayout(cards)
+
+        # ─ Loss graph ─
+        graph_frame = QFrame()
+        graph_frame.setStyleSheet("""
+            QFrame {
+                background: #0f172a;
+                border: 1px solid #1e3a5f;
+                border-radius: 10px;
+            }
+        """)
+        gf = QVBoxLayout(graph_frame)
+        gf.setContentsMargins(10, 10, 10, 10)
+
+        graph_header = QHBoxLayout()
+        graph_header.addWidget(QLabel("Canlı Loss Grafiği", styleSheet="font-size: 13px; font-weight: 600; color: #cbd5e1;"))
+        graph_header.addStretch()
+        self._graph_step_lbl = QLabel("adım: 0")
+        self._graph_step_lbl.setStyleSheet("font-size: 11px; color: #475569;")
+        graph_header.addWidget(self._graph_step_lbl)
+        gf.addLayout(graph_header)
+
+        self._loss_graph = LossGraph()
+        self._loss_graph.setMinimumHeight(220)
+        gf.addWidget(self._loss_graph, 1)
+
+        lay.addWidget(graph_frame, 1)
+
+        # ─ Log ─
+        log_frame = QFrame()
+        log_frame.setStyleSheet(self._frame_style())
+        lf = QVBoxLayout(log_frame)
+        lf.setContentsMargins(0, 0, 0, 0)
+        lf.setSpacing(0)
+
+        log_header = QHBoxLayout()
+        log_header.setContentsMargins(12, 8, 12, 8)
+        log_header.addWidget(QLabel("Eğitim Logu", styleSheet="font-size: 12px; font-weight: 600; color: #64748b;"))
+        log_header.addStretch()
+        clr_btn = QPushButton("Temizle")
+        clr_btn.setStyleSheet(self._btn_style("#374151", height=24, font_px=11))
+        clr_btn.clicked.connect(lambda: self._log_text.clear())
+        log_header.addWidget(clr_btn)
+        lf.addLayout(log_header)
+
+        self._log_text = QTextEdit()
+        self._log_text.setReadOnly(True)
+        self._log_text.setFixedHeight(140)
+        self._log_text.setStyleSheet("""
+            QTextEdit {
+                background: #070d1a;
+                border: none;
+                border-radius: 0;
+                border-bottom-left-radius: 10px;
+                border-bottom-right-radius: 10px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
+                color: #94a3b8;
+                padding: 8px;
+            }
+        """)
+        lf.addWidget(self._log_text)
+        lay.addWidget(log_frame)
+
+        return lay
+
+    # -------------------------------------------------------------------
+
+    def _build_toolbar(self) -> QFrame:
+        toolbar = QFrame()
+        toolbar.setFixedHeight(58)
+        toolbar.setStyleSheet("""
+            QFrame {
+                background: #080d18;
+                border-top: 1px solid #1a2235;
+            }
+        """)
+        lay = QHBoxLayout(toolbar)
+        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setSpacing(10)
+
+        self._start_btn = QPushButton("▶  Eğitimi Başlat")
+        self._start_btn.setFixedHeight(38)
+        self._start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._start_btn.setStyleSheet(self._btn_style("#16a34a", height=38))
+        self._start_btn.clicked.connect(self._start_training)
+        lay.addWidget(self._start_btn)
+
+        self._stop_btn = QPushButton("■  Durdur")
+        self._stop_btn.setFixedHeight(38)
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_btn.setStyleSheet(self._btn_style("#b91c1c", height=38))
+        self._stop_btn.clicked.connect(self._stop_training)
+        lay.addWidget(self._stop_btn)
+
+        lay.addStretch()
+
+        for label, metric in [
+            ("Loss:", "_loss_val"), ("Adım:", "_step_val")
+        ]:
+            lay.addWidget(QLabel(label, styleSheet="font-size: 12px; color: #475569;"))
+            ref = getattr(self, metric)
+            # We use separate smaller stat labels in toolbar instead
+        # compact GPU readout in toolbar
+        self._tb_gpu = QLabel("GPU: — GB")
+        self._tb_gpu.setStyleSheet("font-size: 11px; color: #4b5563;")
+        lay.addWidget(self._tb_gpu)
+
+        # Auto-refresh GPU every 5s
+        self._gpu_timer = QTimer()
+        self._gpu_timer.timeout.connect(self._refresh_gpu)
+        self._gpu_timer.start(5000)
+
+        return toolbar
+
+    # -------------------------------------------------------------------
+    # Dataset pool management
+    # -------------------------------------------------------------------
+
+    def _add_chip(self, dataset: Dict[str, Any]) -> None:
+        chip = DatasetChip(dataset)
+        chip.remove_requested.connect(self._remove_chip)
+        self._chip_widgets.append(chip)
+        self._chips_layout.addWidget(chip)
+        self.dataset_pool.append(dataset)
+        self._empty_pool_lbl.setVisible(False)
+        self._pool_count.setText(f"{len(self.dataset_pool)} veri seti")
+
+    def _remove_chip(self, chip: DatasetChip) -> None:
+        if chip in self._chip_widgets:
+            self._chip_widgets.remove(chip)
+            if chip.dataset in self.dataset_pool:
+                self.dataset_pool.remove(chip.dataset)
+        chip.deleteLater()
+        self._empty_pool_lbl.setVisible(len(self.dataset_pool) == 0)
+        self._pool_count.setText(f"{len(self.dataset_pool)} veri seti")
+
+    def _clear_pool(self) -> None:
+        for chip in list(self._chip_widgets):
+            chip.deleteLater()
+        self._chip_widgets.clear()
+        self.dataset_pool.clear()
+        self._empty_pool_lbl.setVisible(True)
+        self._pool_count.setText("0 veri seti")
+
+    def _add_file_dataset(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Veri Dosyası Seç", "",
+            "Desteklenen (*.json *.jsonl *.csv *.txt *.parquet);;Tümü (*)"
+        )
+        for p in paths:
+            self._add_chip({"type": "file", "path": p, "name": Path(p).stem})
+
+    def _add_hf_dataset(self) -> None:
+        dlg = DownloadDatasetDialog(self.dataset_downloader, self)
+        if dlg.exec():
+            key = dlg.selected_key
+            max_samples = dlg.max_samples
+            if key:
+                # Determine display name
+                if key.startswith("custom:"):
+                    hf_id = key.replace("custom:", "").strip()
+                    name = hf_id
+                    dataset_key = hf_id
+                else:
+                    info = self.dataset_downloader.READY_DATASETS.get(key, {})
+                    name = info.get("name", key)
+                    dataset_key = key
+                self._add_chip({
+                    "type": "huggingface",
+                    "name": name,
+                    "dataset_key": dataset_key,
+                    "max_samples": max_samples,
+                })
+
+    def _add_conversations_dataset(self) -> None:
+        if not self.database:
+            QMessageBox.warning(self, "Uyarı", "Veritabanı bağlantısı yok.")
             return
-
-        source_type = source_data["type"]
-        data = source_data["data"]
-
-        self.quick_source_combo.setCurrentIndex(0)
-
-        if source_type == "url":
-            self._add_to_pool("Hızlı Web URL'leri", "urls", data)
-            self._log(f"Hızlı kaynak havuza eklendi: {len(data)} adet URL (Web)")
-        elif source_type == "dataset":
-            self._start_quick_download(data)
-
-    def _add_to_pool(self, name: str, data_type: str, data: Any):
-        self.dataset_pool.append({
-            "name": name,
-            "type": data_type,
-            "data": data
+        convs = self.database.get_all_conversations()
+        if not convs:
+            QMessageBox.information(self, "Bilgi", "Henüz sohbet kaydı yok.")
+            return
+        self._add_chip({
+            "type": "conversations",
+            "name": f"Sohbet Geçmişi ({len(convs)} konuşma)",
+            "conversations": convs,
         })
-        self._update_dataset_ui()
 
-    def _remove_from_pool(self) -> None:
-        current_row = self.pool_list.currentRow()
-        if current_row >= 0:
-            removed = self.dataset_pool.pop(current_row)
-            self._log(f"Havuzdan çıkarıldı: {removed['name']}")
-            self._update_dataset_ui()
+    def _add_url_dataset(self) -> None:
+        dlg = CrawlURLDialog(self)
+        if dlg.exec():
+            urls = dlg.get_urls()
+            depth = dlg.get_crawl_depth()
+            if urls:
+                name = urls[0][:35] + ("..." if len(urls[0]) > 35 else "")
+                if len(urls) > 1:
+                    name += f" (+{len(urls)-1})"
+                if depth > 0:
+                    name += f" [derinlik:{depth}]"
+                self._add_chip({
+                    "type": "urls",
+                    "data": urls,
+                    "name": name,
+                    "crawl_depth": depth,
+                })
 
-    def _start_quick_download(self, dataset_key: str) -> None:
-        max_samples = 5000
-        self._log(f"Hızlı indirme başlatılıyor: {dataset_key}")
-        
-        self.progress_dialog = QProgressDialog(f"'{dataset_key}' İndiriliyor...\nLütfen Bekleyin.", "İptal", 0, 0, self)
-        self.progress_dialog.setWindowTitle("İndiriliyor")
-        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self.progress_dialog.setCancelButton(None)
-        self.progress_dialog.show()
+    def _on_training_type_changed(self) -> None:
+        is_lora = self._training_type_combo.currentData() == "lora"
+        self._lora_r_spin.setEnabled(is_lora)
 
-        dataset_name = dataset_key
-        if dataset_key in self.dataset_downloader.READY_DATASETS:
-            dataset_name = self.dataset_downloader.READY_DATASETS[dataset_key]["name"]
+    # -------------------------------------------------------------------
+    # Training
+    # -------------------------------------------------------------------
 
-        self.download_thread = DownloadThread(self.dataset_downloader, dataset_key, max_samples)
-        self.download_thread.finished.connect(lambda data: self._on_download_finished(data, dataset_name))
-        self.download_thread.error.connect(self._on_download_error)
-        self.download_thread.start()
-
-    def _open_crawl_dialog(self) -> None:
-        dialog = CrawlURLDialog(self)
-        if dialog.exec():
-            urls = dialog.urls
-            self._add_to_pool(f"Web'den Çekilen URL'ler ({len(urls)} adet)", "urls", urls)
-            self._log(f"Web urls havuza eklendi: {len(urls)} adet URL")
-
-    def _load_from_file(self) -> None:
-        filepath, _ = QFileDialog.getOpenFileName(
-            self,
-            "Veri Dosyası Seç",
-            "",
-            "Desteklenen Formatlar (*.json *.jsonl *.csv *.txt *.md);;All Files (*)",
-        )
-
-        if filepath:
-            try:
-                data_type = self.data_type_combo.currentData()
-                if data_type == "texts":
-                    # Load as raw text chunks
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    # Split by triple dash or just take the whole thing
-                    if "---" in content:
-                        loaded_data = [s.strip() for s in content.split("---") if s.strip()]
-                    else:
-                        loaded_data = [content.strip()]
-                else:
-                    loaded_data = self.dataset_loader.load_from_file(filepath)
-                
-                self._add_to_pool(Path(filepath).name, data_type, loaded_data)
-                self._log(f"Dosya havuza eklendi: {filepath}")
-            except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Dosya yüklenemedi: {e}")
-
-    def _load_from_directory(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Veri Dizini Seç")
-
-        if directory:
-            try:
-                data_type = self.data_type_combo.currentData()
-                loaded_data = []
-                if data_type == "texts":
-                    path = Path(directory)
-                    for filepath in path.glob("**/*"):
-                        if filepath.is_file() and filepath.suffix.lower() in [".txt", ".md", ".py", ".js", ".c", ".cpp"]:
-                            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                                loaded_data.append(f.read().strip())
-                else:
-                    loaded_data = self.dataset_loader.load_from_directory(directory)
-                
-                self._add_to_pool(f"Dizin: {Path(directory).name}", data_type, loaded_data)
-                self._log(f"Dizin havuza eklendi: {directory}")
-            except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Dizin yüklenemedi: {e}")
-
-    def _clear_dataset(self) -> None:
-        self.dataset_pool = []
-        self._update_dataset_ui()
-        self._log("Veri havuzu temizlendi")
-
-    def _update_dataset_ui(self, is_urls: bool = False) -> None:
-        total_items = 0
-        self.pool_list.clear()
-        
-        for item in self.dataset_pool:
-            count = len(item["data"])
-            total_items += count
-            self.pool_list.addItem(f"{item['name']} ({count} kayıt) - [{item['type']}]")
-
-        self.dataset_stats_label.setText(
-            f"Yüklenen toplam veri: {total_items} kayıt (Çoklu-Veri Havuzu)"
-        )
-
-        self.preview_list.clear()
-        if self.dataset_pool:
-            last_data = self.dataset_pool[-1]["data"]
-            for i, d_item in enumerate(last_data[:50]):
-                if isinstance(d_item, dict):
-                    item_text = (
-                        f"User: {d_item.get('user', '')[:50]}... | Assistant: {d_item.get('assistant', '')[:50]}..."
-                    )
-                else:
-                    item_text = f"Text/URL: {str(d_item)[:100]}..."
-                self.preview_list.addItem(item_text)
+    def _collect_training_config(self) -> Dict[str, Any]:
+        return {
+            "num_epochs": self._epochs_spin.value(),
+            "batch_size": self._batch_spin.value(),
+            "learning_rate": self._lr_dspin.value(),
+            "lora_r": self._lora_r_spin.value(),
+            "max_steps": self._max_steps_spin.value() if self._max_steps_spin.value() != -1 else None,
+            "training_type": self._training_type_combo.currentData(),
+        }
 
     def _start_training(self) -> None:
         if not self.trainer:
-            QMessageBox.warning(self, "Uyarı", "Model yüklenmemiş!")
+            QMessageBox.warning(self, "Uyarı", "Model yüklenmeden eğitim başlatılamaz.")
             return
-
         if not self.dataset_pool:
-            QMessageBox.warning(self, "Uyarı", "Veri havuzu boş!")
+            QMessageBox.warning(self, "Uyarı", "Veri havuzu boş. Lütfen veri seti ekleyin.")
             return
 
-        training_config = {
-            "training_type": self.training_type_combo.currentData(),
-            "num_train_epochs": self.epochs_spin.value(),
-            "per_device_train_batch_size": self.batch_size_spin.value(),
-            "gradient_accumulation_steps": self.grad_accum_spin.value(),
-            "learning_rate": self.lr_spin.value(),
-            "warmup_steps": self.warmup_spin.value(),
-            "max_length": self.max_length_spin.value(),
-            "pack_sequences": self.pack_sequences_check.isChecked(),
-            "output_dir": self.output_dir_edit.text(),
-            "resume_from_checkpoint": self.resume_check.isChecked(),
-        }
-
-        self.training_thread = TrainingThread(
-            self.trainer, self.dataset_pool, training_config, mode="pool"
+        self._is_training = True
+        self._start_time = time.time()
+        self._start_btn.setEnabled(False)
+        self._stop_btn.setEnabled(True)
+        self._phase_badge.setText("⚡ Eğitim Devam Ediyor")
+        self._phase_badge.setStyleSheet(
+            "QLabel { background: #16a34a; color: #86efac; border-radius: 10px; padding: 3px 10px; font-size: 11px; font-weight: 600; }"
         )
-        self.training_thread.log.connect(self._log)
-        self.training_thread.progress.connect(self._update_progress)
-        self.training_thread.finished.connect(self._training_finished)
-        self.training_thread.error.connect(self._training_error)
+        self._loss_graph.reset()
+        self._log("Eğitim başlatılıyor...")
 
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
-        self.save_ckpt_btn.setEnabled(False)
-        self.stats_dashboard.clear()
+        cfg = self._collect_training_config()
+        self.training_thread = TrainingThread(
+            self.trainer, self.dataset_pool, cfg, mode="pool"
+        )
+        self.training_thread.progress.connect(self._on_progress)
+        self.training_thread.finished.connect(self._on_training_done)
+        self.training_thread.error.connect(self._on_training_error)
+        self.training_thread.log.connect(self._log)
         self.training_thread.start()
-        self._log("Eğitim başlatıldı")
 
     def _stop_training(self) -> None:
         if self.training_thread and self.training_thread.isRunning():
-            self.trainer.stop_training()
-            self._log("Eğitim durdurma isteği gönderildi (bir sonraki adımda duracak)...")
-            self.stop_btn.setEnabled(False)
-            self.stop_btn.setText("Durduruluyor...")
-        else:
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-            self.stop_btn.setText("⏹️ Durdur")
+            self.training_thread.requestInterruption()
+            self.training_thread.wait(2000)
+        self._finish_training("Eğitim durduruldu.")
 
-    def _update_progress(self, progress: dict) -> None:
-        if "progress_percent" in progress:
-            self.progress_bar.setValue(int(progress["progress_percent"]))
+    def _on_progress(self, data: Dict[str, Any]) -> None:
+        loss = data.get("loss")
+        step = data.get("step", 0)
+        total = data.get("total_steps") or data.get("num_steps", 0)
 
-        step = progress.get('current_step', 0)
-        max_steps = progress.get('max_steps', 0)
-        loss = progress.get('loss', 0)
-        epoch = progress.get('epoch', 0)
-        lr = progress.get('learning_rate', 0)
-        grad_norm = progress.get('grad_norm', 0)
-        speed = progress.get('speed', 0)
-        eta = progress.get('eta', 0)
+        if loss is not None:
+            self._loss_val.setText(f"{loss:.4f}")
+            self._loss_graph.add_loss(float(loss))
 
-        # Format ETA
-        eta_str = "..."
-        if eta > 0:
-            if eta > 3600:
-                eta_str = f"{int(eta // 3600)}h {int((eta % 3600) // 60)}m"
-            elif eta > 60:
-                eta_str = f"{int(eta // 60)}m {int(eta % 60)}s"
-            else:
-                eta_str = f"{int(eta)}s"
+        step_str = f"{step} / {total}" if total else str(step)
+        self._step_val.setText(step_str)
+        self._graph_step_lbl.setText(f"adım: {step}")
 
-        cpu = progress.get('cpu_percent', 0)
-        ram = progress.get('ram_percent', 0)
-        gpu = progress.get('gpu_mem_gb', 0)
+        if self._start_time and step > 0 and total:
+            elapsed = time.time() - self._start_time
+            estimated_total = elapsed / step * total
+            remaining = max(0, estimated_total - elapsed)
+            m, s = divmod(int(remaining), 60)
+            h, m = divmod(m, 60)
+            self._eta_val.setText(f"{h}s {m}d {s}s" if h else f"{m}d {s}s")
 
-        self.progress_label.setText(
-            f"Adım: {step}/{max_steps} | Epoch: {epoch:.2f} | Loss: {loss:.4f} | "
-            f"Grad Norm: {grad_norm:.4f} | LR: {lr:.2e} | ETA: {eta_str} | Hız: {speed:.2f} step/s"
+    def _on_training_done(self, metrics: Dict[str, Any]) -> None:
+        self._log(f"✓ Eğitim tamamlandı. Son loss: {metrics.get('train_loss', '?'):.4f}")
+        self._finish_training("Eğitim tamamlandı.")
+
+    def _on_training_error(self, msg: str) -> None:
+        self._log(f"✗ Hata: {msg}")
+        self._finish_training(f"Hata: {msg}")
+        QMessageBox.critical(self, "Eğitim Hatası", msg)
+
+    def _finish_training(self, message: str = "") -> None:
+        self._is_training = False
+        self._start_btn.setEnabled(True)
+        self._stop_btn.setEnabled(False)
+        self._phase_badge.setText("Hazır")
+        self._phase_badge.setStyleSheet(
+            "QLabel { background: #1e3a5f; color: #93c5fd; border-radius: 10px; padding: 3px 10px; font-size: 11px; font-weight: 600; }"
         )
-        self.sys_stats_label.setText(f"Sistem: CPU {cpu:.1f}% | RAM {ram:.1f}% | GPU VRAM {gpu:.2f} GB")
-        
-        self.stats_dashboard.add_data(step, loss, lr, grad_norm)
-        self._log(f"Step {step}/{max_steps} | Loss: {loss:.4f} | Grad: {grad_norm:.4f} | Hız: {speed:.2f} s/s")
+        if message:
+            self.main_window.update_status(message)
 
-    def _training_finished(self, metrics: dict) -> None:
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.save_ckpt_btn.setEnabled(True)
-        self.stop_btn.setText("⏹️ Durdur")
-        self.progress_bar.setValue(100)
-        self.progress_label.setText("Eğitim tamamlandı veya durduruldu!")
-        if self.trainer and getattr(self.trainer, "should_stop", False):
-             self._log("Eğitim kullanıcı tarafından durduruldu.")
+    def _log(self, msg: str) -> None:
+        ts = time.strftime("%H:%M:%S")
+        self._log_text.append(f"[{ts}] {msg}")
+
+    def _refresh_gpu(self) -> None:
+        if torch.cuda.is_available():
+            used = torch.cuda.memory_allocated() / (1024 ** 3)
+            total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            s = f"GPU: {used:.1f}/{total:.0f} GB"
+            self._gpu_val.setText(f"{used:.1f} / {total:.0f} GB")
         else:
-             self._log(f"Eğitim tamamlandı: {metrics}")
-             QMessageBox.information(self, "Başarılı", "Eğitim başarıyla tamamlandı!")
+            s = "GPU: CPU modu"
+        self._tb_gpu.setText(s)
 
-    def _training_error(self, error: str) -> None:
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.save_ckpt_btn.setEnabled(True)
-        self.stop_btn.setText("⏹️ Durdur")
-        self._log(f"Hata: {error}")
-        QMessageBox.critical(self, "Hata", f"Eğitim hatası: {error}")
+    # -------------------------------------------------------------------
+    # Styles
+    # -------------------------------------------------------------------
 
-    def _log(self, message: str) -> None:
-        from datetime import datetime
+    @staticmethod
+    def _frame_style() -> str:
+        return """
+            QFrame {
+                background: #0f172a;
+                border: 1px solid #1e3a5f;
+                border-radius: 10px;
+            }
+        """
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.append(f"[{timestamp}] {message}")
+    @staticmethod
+    def _btn_style(bg: str, height: int = 32, font_px: int = 12) -> str:
+        return f"""
+            QPushButton {{
+                background: {bg};
+                border: none;
+                border-radius: 7px;
+                height: {height}px;
+                font-size: {font_px}px;
+                font-weight: 600;
+                color: #f1f5f9;
+                padding: 0 12px;
+            }}
+            QPushButton:hover {{ opacity: 0.85; }}
+            QPushButton:disabled {{ background: #1e293b; color: #475569; }}
+        """
 
-    def _open_download_dialog(self) -> None:
-        dialog = DownloadDatasetDialog(self.dataset_downloader, self)
-        if dialog.exec():
-            dataset_key = dialog.selected_key
-            max_samples = dialog.max_samples
-            
-            dataset_name = dataset_key
-            if dataset_key in self.dataset_downloader.READY_DATASETS:
-                dataset_name = self.dataset_downloader.READY_DATASETS[dataset_key]["name"]
-
-            self._log(f"İndirme başlatılıyor: {dataset_name} (Maks: {max_samples} örnek)")
-            
-            self.progress_dialog = QProgressDialog("Veriseti İndiriliyor...\nLütfen Bekleyin.", "İptal", 0, 0, self)
-            self.progress_dialog.setWindowTitle("İndiriliyor")
-            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-            self.progress_dialog.setCancelButton(None)
-            self.progress_dialog.show()
-
-            self.download_thread = DownloadThread(self.dataset_downloader, dataset_key, max_samples)
-            self.download_thread.finished.connect(lambda data: self._on_download_finished(data, dataset_name))
-            self.download_thread.error.connect(self._on_download_error)
-            self.download_thread.start()
-
-    def _on_download_finished(self, data: List[Dict[str, str]], name: str) -> None:
-        if self.progress_dialog:
-            self.progress_dialog.close()
-            
-        data_type = self.data_type_combo.currentData()
-        self._add_to_pool(name, data_type, data)
-        self._log(f"İndirme tamamlandı: {name} ({len(data)} kayıt)")
-        
-        if self.download_thread:
-            self.download_thread.deleteLater()
-            self.download_thread = None
-
-    def _on_download_error(self, error: str) -> None:
-        if self.progress_dialog:
-            self.progress_dialog.close()
-            
-        self._log(f"İndirme hatası: {error}")
-        QMessageBox.critical(self, "Hata", f"Veriseti indirilemedi:\n{error}")
-        
-        if self.download_thread:
-            self.download_thread.deleteLater()
-            self.download_thread = None
-    def _on_training_type_changed(self, index: int) -> None:
-        """Handle training type change."""
-        self.resume_check.setChecked(False)
-        
-        # Double check 4-bit if they somehow triggered this
-        is_4bit = self.config.get("model.load_in_4bit", False)
-        if hasattr(self.main_window, "model_manager") and self.main_window.model_manager and self.main_window.model_manager.model:
-            is_4bit = getattr(self.main_window.model_manager, "load_in_4bit", is_4bit)
-            
-        if index == 1 and is_4bit: # Full selected
-            QMessageBox.warning(
-                self, 
-                "Geçersiz Seçim", 
-                "Model şu an 4-bit (Quantized) modunda yüklü. \n\n"
-                "Tam Parametre Eğitimi (Full Training) için modelin 16-bit veya 32-bit (FP16/FP32) modunda yüklenmiş olması gerekir.\n\n"
-                "Lütfen Ayarlar -> Model sekmesinden 'load_in_4bit' seçeneğini kapatıp uygulamayı yeniden başlatın."
-            )
-            self.training_type_combo.setCurrentIndex(0) # Back to LoRA
+    @staticmethod
+    def _spinbox_style() -> str:
+        return """
+            QSpinBox, QDoubleSpinBox {
+                background: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: #e2e8f0;
+                font-size: 12px;
+            }
+            QSpinBox::up-button, QDoubleSpinBox::up-button,
+            QSpinBox::down-button, QDoubleSpinBox::down-button {
+                background: #334155;
+                border-radius: 3px;
+            }
+        """
