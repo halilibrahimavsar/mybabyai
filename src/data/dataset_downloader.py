@@ -229,6 +229,14 @@ class DatasetDownloader:
                     self.logger.error(f"Dataset indirme hatası: {e}")
                     raise
 
+        err_str = str(last_exception).lower()
+        if "unknown split" in err_str or "should be one of" in err_str:
+            # All splits tried and none worked — return empty instead of crashing
+            self.logger.warning(
+                f"Dataset '{dataset_name}' için hiçbir uyumlu split veya format bulunamadı. "
+                f"Son hata: {last_exception}"
+            )
+            return []
         self.logger.error(f"Dataset indirme hatası (hiçbir split bulunamadı): {last_exception}")
         raise last_exception
 
@@ -306,8 +314,8 @@ class DatasetDownloader:
                 half = len(text) // 2
                 return {"user": text[:half].strip(), "assistant": text[half:].strip()}
 
-        # Debug: Log keys if no match found (only once per dataset ideally, but here every time)
-        # self.logger.debug(f"Uyumsuz veri formatı! Mevcut anahtarlar: {list(item.keys())}")
+        # Log unrecognized schema — helps debug new datasets
+        self.logger.debug(f"Tanınmayan veri formatı! Anahtarlar: {list(item.keys())}")
         return None
 
     def download_and_save(
