@@ -41,8 +41,10 @@ class LoRATrainer:
         self.is_training = False
         self.progress_callback = None
         self.should_stop = False
+        self.current_training_type = "lora"
 
     def prepare_model_for_training(self, training_type: str = "lora") -> None:
+        self.current_training_type = training_type
         if self.model_manager.model is None:
             raise ValueError("Model yüklenmemiş")
 
@@ -58,6 +60,17 @@ class LoRATrainer:
             # If model was loaded in 4-bit, we can't easily do full training, warn the user
             if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
                 self.logger.warning("DİKKAT: Model quantized (4-bit/8-bit) olarak yüklendiği için Full Training yapılamaz veya hatalı sonuç verebilir. Lütfen konfigürasyondan load_in_4bit'i kapatın.")
+            
+            # Print parameters for full training as well
+            trainable_params, all_param = 0, 0
+            for _, param in model.named_parameters():
+                num_params = param.numel()
+                if num_params == 0 and hasattr(param, "ds_numel"):
+                    num_params = param.ds_numel
+                all_param += num_params
+                if param.requires_grad:
+                    trainable_params += num_params
+            self.logger.info(f"Full Training: trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}")
             
             self.model_manager.model = model
             return
@@ -129,10 +142,17 @@ class LoRATrainer:
             "output_dir", "models/fine_tuned"
         )
 
-        # Use lower LR and cosine schedule for more stable training
         is_codemind = self.model_manager.is_codemind
-        # DEFAULT optimization: 5e-5 for codemind, 2e-4 for others
-        default_lr = 5e-5 if is_codemind else 2e-4
+        is_full_training = getattr(self, "current_training_type", "lora") == "full"
+        
+        # DEFAULT optimization: 
+        # CodeMind (Full): 3e-4
+        # CodeMind (LoRA): 5e-5
+        # Others: 2e-4
+        if is_codemind:
+            default_lr = 3e-4 if is_full_training else 5e-5
+        else:
+            default_lr = 3e-4 if is_full_training else 2e-4
         
         # CPU Optimization settings
         cpu_count = psutil.cpu_count(logical=False)
@@ -153,7 +173,11 @@ class LoRATrainer:
             gradient_checkpointing = bool(gradient_checkpointing_setting)
 
         if self.model_manager.device == "cuda":
-            default_optim = "paged_adamw_8bit" if use_4bit else "adamw_torch"
+            # 8-bit optimizer is memory efficient for LoRA but can cause divergence in full training.
+            if is_full_training:
+                default_optim = "adamw_torch"
+            else:
+                default_optim = "paged_adamw_8bit" if use_4bit else "adamw_torch"
         else:
             default_optim = "adamw_torch"
 

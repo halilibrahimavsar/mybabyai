@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to a specific model checkpoint to load (e.g. codemind/checkpoints/model_best.pt)")
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    parser.add_argument("--training-type", type=str, default="lora", choices=["lora", "full"], help="Type of training to perform (lora or full)")
     
     args = parser.parse_args()
     
@@ -108,9 +109,9 @@ def main():
     logger.info("Initializing Trainer...")
     trainer = LoRATrainer(model_manager, config)
     
-    logger.info(f"Starting training for {args.epochs} epochs with batch size {args.batch_size}...")
+    logger.info(f"Starting {args.training_type} training for {args.epochs} epochs with batch size {args.batch_size}...")
     try:
-        metrics = trainer.train_from_texts(texts)
+        metrics = trainer.train_from_texts(texts, training_type=args.training_type)
         logger.info(f"Training completed successfully!")
         logger.info(f"Metrics: {metrics}")
     except KeyboardInterrupt:
