@@ -205,11 +205,11 @@ class DatasetDownloader:
                 self.logger.info(f"Split deneniyor: {s}")
                 if config:
                     dataset = load_dataset(
-                        dataset_name, config, split=s, token=token, trust_remote_code=True
+                        dataset_name, config, split=s, token=token
                     )
                 else:
                     dataset = load_dataset(
-                        dataset_name, split=s, token=token, trust_remote_code=True
+                        dataset_name, split=s, token=token
                     )
 
                 conversations = self._convert_to_conversations(dataset, max_samples)
@@ -219,10 +219,11 @@ class DatasetDownloader:
                 else:
                     self.logger.info(f"Split {s} boş veya uyumsuz formatta, sıradakine geçiliyor...")
                     continue
-            except Exception as e:
+            except (ValueError, Exception) as e:
                 last_exception = e
-                # If it's a split error, continue. Otherwise raise (e.g. auth error)
-                if "Unknown split" in str(e) or "split" in str(e).lower():
+                err_str = str(e).lower()
+                # Continue trying other splits for any split-related error
+                if "unknown split" in err_str or "split" in err_str or "should be one of" in err_str:
                     continue
                 else:
                     self.logger.error(f"Dataset indirme hatası: {e}")
