@@ -261,17 +261,18 @@ class DatasetDownloader:
         return conversations
 
     def _extract_conversation(self, item: Dict) -> Optional[Dict[str, str]]:
-        # Case-insensitive key mapping
-        k = {key.lower(): key for key in item.keys()}
+        # Case-insensitive and space-robust key mapping
+        # We strip surrounding whitespace because some Turkish datasets have " giriş" or " çıktı"
+        k = {key.strip().lower(): key for key in item.keys()}
         
         # 1. Alpaca Style (instruction, input, output) / Turkish Support
         # Turkish mapping: talimat -> instruction, giriş -> input, çıktı -> output
-        inst_key = k.get("instruction") or k.get("talimat") or k.get("task")
-        out_key = k.get("output") or k.get("response") or k.get("answer") or k.get("çıktı") or k.get("output")
+        inst_key = k.get("instruction") or k.get("talimat") or k.get("task") or k.get("özet")
+        out_key = k.get("output") or k.get("response") or k.get("answer") or k.get("çıktı") or k.get("çözüm")
         
         if inst_key and out_key:
             inst = item.get(inst_key, "")
-            inp_key = k.get("input") or k.get("giriş") or k.get("context")
+            inp_key = k.get("input") or k.get("giriş") or k.get("context") or k.get("bağlam")
             inp = item.get(inp_key, "") if inp_key else ""
             out = item.get(out_key, "")
             
@@ -290,28 +291,32 @@ class DatasetDownloader:
             out_key = k.get("answer") or k.get("response")
             return {"user": str(item[k["question"]]), "assistant": str(item[out_key])}
 
-        # 4. Messages Style (ChatML / ShareGPT / UltraChat)
-        if "messages" in k:
-            messages = item[k["messages"]]
+        # 4. Messages Style (ChatML / ShareGPT / UltraChat / SlimOrca)
+        # Handle both "messages" and "conversations" keys
+        msg_key = k.get("messages") or k.get("conversations")
+        if msg_key:
+            messages = item[msg_key]
             if not isinstance(messages, list):
                 return None
                 
-            # For multi-turn, we can either flatten it or take the last pair.
-            # Here we try to concatenate turns to give the model more context.
             user_content = []
             assistant_content = []
             
             for msg in messages:
-                role = str(msg.get("role", "")).lower()
-                content = str(msg.get("content", ""))
-                if role == "user":
+                # ShareGPT uses 'from' and 'value', ChatML uses 'role' and 'content'
+                role_key = "from" if "from" in msg else "role"
+                content_key = "value" if "value" in msg else "content"
+                
+                role = str(msg.get(role_key, "")).lower()
+                content = str(msg.get(content_key, ""))
+                
+                if role in ["user", "human", "citizen"]:
                     user_content.append(content)
-                elif role in ["assistant", "bot", "model"]:
+                elif role in ["assistant", "bot", "model", "gpt"]:
                     assistant_content.append(content)
             
             if user_content and assistant_content:
-                # Taking the last full turn for simplicity in SFT, 
-                # but with the option to join them for context.
+                # For SFT, we take the last turn. In full training, we might join them.
                 return {
                     "user": user_content[-1], 
                     "assistant": assistant_content[-1]
@@ -336,7 +341,7 @@ class DatasetDownloader:
                 half = len(text) // 2
                 return {"user": text[:half].strip(), "assistant": text[half:].strip()}
 
-        # Log unrecognized schema — helps debug new datasets
+        # Log unrecognized schema
         self.logger.debug(f"Tanınmayan veri formatı! Anahtarlar: {list(item.keys())}")
         return None
 
