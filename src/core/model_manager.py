@@ -41,13 +41,32 @@ class ModelManager:
     def _get_device(self) -> str:
         device_config = self.config.get("model.device", "auto")
 
+        # Always validate CUDA is actually available, regardless of config.
+        # This prevents an AssertionError crash in environments like Colab
+        # CPU runtimes where CUDA is not compiled into the Torch installation.
+        cuda_available = torch.cuda.is_available()
+        mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+
         if device_config == "auto":
-            if torch.cuda.is_available():
+            if cuda_available:
                 return "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            elif mps_available:
                 return "mps"
             else:
                 return "cpu"
+
+        # Explicit config override — but still validate
+        if device_config == "cuda" and not cuda_available:
+            self.logger.warning(
+                "Config 'cuda' olarak ayarlandı fakat CUDA mevcut değil. CPU'ya geçiliyor."
+            )
+            return "cpu"
+        if device_config == "mps" and not mps_available:
+            self.logger.warning(
+                "Config 'mps' olarak ayarlandı fakat MPS mevcut değil. CPU'ya geçiliyor."
+            )
+            return "cpu"
+
         return device_config
 
     def _get_quantization_config(self) -> Optional[BitsAndBytesConfig]:
@@ -242,7 +261,10 @@ class ModelManager:
             max_position_embeddings=2048
         )
         self.model = CodeMindForCausalLM(config)
-        self.model = self.model.to(self.device).eval()
+        # Safely move the model to device — if CUDA is unavailable at runtime,
+        # self.device was already corrected to 'cpu' in _get_device.
+        safe_device = self.device
+        self.model = self.model.to(safe_device).eval()
         
         self.codemind_adapter.model = self.model
         self.codemind_adapter.tokenizer = self.tokenizer
