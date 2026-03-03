@@ -264,15 +264,20 @@ class DatasetDownloader:
         # Case-insensitive key mapping
         k = {key.lower(): key for key in item.keys()}
         
-        # 1. Alpaca Style (instruction, input, output)
-        if "instruction" in k and ("output" in k or "response" in k or "answer" in k):
-            inst = item.get(k["instruction"], "")
-            inp = item.get(k.get("input", ""), "")
-            out_key = k.get("output") or k.get("response") or k.get("answer")
+        # 1. Alpaca Style (instruction, input, output) / Turkish Support
+        # Turkish mapping: talimat -> instruction, giriş -> input, çıktı -> output
+        inst_key = k.get("instruction") or k.get("talimat") or k.get("task")
+        out_key = k.get("output") or k.get("response") or k.get("answer") or k.get("çıktı") or k.get("output")
+        
+        if inst_key and out_key:
+            inst = item.get(inst_key, "")
+            inp_key = k.get("input") or k.get("giriş") or k.get("context")
+            inp = item.get(inp_key, "") if inp_key else ""
             out = item.get(out_key, "")
+            
             user_msg = f"{inst}\n{inp}".strip() if inp else inst
             if user_msg and out:
-                return {"user": user_msg, "assistant": out}
+                return {"user": str(user_msg), "assistant": str(out)}
 
         # 2. Prompt/Completion or Prompt/Response
         if "prompt" in k and ("completion" in k or "response" in k or "answer" in k):
@@ -285,20 +290,32 @@ class DatasetDownloader:
             out_key = k.get("answer") or k.get("response")
             return {"user": str(item[k["question"]]), "assistant": str(item[out_key])}
 
-        # 4. Messages Style (ChatML / ShareGPT)
+        # 4. Messages Style (ChatML / ShareGPT / UltraChat)
         if "messages" in k:
             messages = item[k["messages"]]
-            user_msg = ""
-            assistant_msg = ""
+            if not isinstance(messages, list):
+                return None
+                
+            # For multi-turn, we can either flatten it or take the last pair.
+            # Here we try to concatenate turns to give the model more context.
+            user_content = []
+            assistant_content = []
+            
             for msg in messages:
                 role = str(msg.get("role", "")).lower()
-                content = msg.get("content", "")
+                content = str(msg.get("content", ""))
                 if role == "user":
-                    user_msg = content
+                    user_content.append(content)
                 elif role in ["assistant", "bot", "model"]:
-                    assistant_msg = content
-            if user_msg and assistant_msg:
-                return {"user": user_msg, "assistant": assistant_msg}
+                    assistant_content.append(content)
+            
+            if user_content and assistant_content:
+                # Taking the last full turn for simplicity in SFT, 
+                # but with the option to join them for context.
+                return {
+                    "user": user_content[-1], 
+                    "assistant": assistant_content[-1]
+                }
 
         # 5. Translation Style
         if "translation" in k:
