@@ -248,57 +248,66 @@ class DatasetDownloader:
         return conversations
 
     def _extract_conversation(self, item: Dict) -> Optional[Dict[str, str]]:
-        if "instruction" in item and "output" in item:
-            return {
-                "user": item.get("instruction", ""),
-                "assistant": item.get("output", ""),
-            }
-        elif "prompt" in item and "completion" in item:
-            return {
-                "user": item.get("prompt", ""),
-                "assistant": item.get("completion", ""),
-            }
-        elif "question" in item and "answer" in item:
-            return {
-                "user": item.get("question", ""),
-                "assistant": item.get("answer", ""),
-            }
-        elif "text" in item:
-            text = item["text"]
-            if "### Human:" in text and "### Assistant:" in text:
-                parts = text.split("### Assistant:")
-                user_part = parts[0].replace("### Human:", "").strip()
-                assistant_part = (
-                    parts[1].split("###")[0].strip() if len(parts) > 1 else ""
-                )
-                return {"user": user_part, "assistant": assistant_part}
-            else:
-                # Fallback for plain text datasets like tiny_shakespeare
-                # Split roughly in half or use as is
-                half = len(text) // 2
-                return {
-                    "user": text[:half].strip(),
-                    "assistant": text[half:].strip(),
-                }
-        elif "messages" in item:
-            messages = item["messages"]
+        # Case-insensitive key mapping
+        k = {key.lower(): key for key in item.keys()}
+        
+        # 1. Alpaca Style (instruction, input, output)
+        if "instruction" in k and ("output" in k or "response" in k or "answer" in k):
+            inst = item.get(k["instruction"], "")
+            inp = item.get(k.get("input", ""), "")
+            out_key = k.get("output") or k.get("response") or k.get("answer")
+            out = item.get(out_key, "")
+            user_msg = f"{inst}\n{inp}".strip() if inp else inst
+            if user_msg and out:
+                return {"user": user_msg, "assistant": out}
+
+        # 2. Prompt/Completion or Prompt/Response
+        if "prompt" in k and ("completion" in k or "response" in k or "answer" in k):
+            out_key = k.get("completion") or k.get("response") or k.get("answer")
+            if item[k["prompt"]] and item[out_key]:
+                return {"user": str(item[k["prompt"]]), "assistant": str(item[out_key])}
+
+        # 3. Question/Answer Style
+        if "question" in k and ("answer" in k or "response" in k):
+            out_key = k.get("answer") or k.get("response")
+            return {"user": str(item[k["question"]]), "assistant": str(item[out_key])}
+
+        # 4. Messages Style (ChatML / ShareGPT)
+        if "messages" in k:
+            messages = item[k["messages"]]
             user_msg = ""
             assistant_msg = ""
             for msg in messages:
-                if msg.get("role") == "user":
-                    user_msg = msg.get("content", "")
-                elif msg.get("role") == "assistant":
-                    assistant_msg = msg.get("content", "")
-            if user_msg or assistant_msg:
+                role = str(msg.get("role", "")).lower()
+                content = msg.get("content", "")
+                if role == "user":
+                    user_msg = content
+                elif role in ["assistant", "bot", "model"]:
+                    assistant_msg = content
+            if user_msg and assistant_msg:
                 return {"user": user_msg, "assistant": assistant_msg}
-        elif "translation" in item:
-            trans = item["translation"]
-            # Try to find two different languages
+
+        # 5. Translation Style
+        if "translation" in k:
+            trans = item[k["translation"]]
             langs = list(trans.keys())
             if len(langs) >= 2:
-                # Use first as user/input, second as assistant/target
-                return {"user": trans[langs[0]], "assistant": trans[langs[1]]}
+                return {"user": str(trans[langs[0]]), "assistant": str(trans[langs[1]])}
 
+        # 6. Plain Text Fallback
+        if "text" in k:
+            text = str(item[k["text"]])
+            if "### Human:" in text and "### Assistant:" in text:
+                parts = text.split("### Assistant:")
+                user_part = parts[0].replace("### Human:", "").strip()
+                assistant_part = parts[1].split("###")[0].strip() if len(parts) > 1 else ""
+                return {"user": user_part, "assistant": assistant_part}
+            elif len(text) > 20:
+                half = len(text) // 2
+                return {"user": text[:half].strip(), "assistant": text[half:].strip()}
+
+        # Debug: Log keys if no match found (only once per dataset ideally, but here every time)
+        # self.logger.debug(f"Uyumsuz veri formatı! Mevcut anahtarlar: {list(item.keys())}")
         return None
 
     def download_and_save(
