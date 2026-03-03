@@ -338,6 +338,31 @@ class LoRATrainer:
         self.logger.info(f"{len(texts)} adet URL'den metin başarıyla çekildi.")
         return self.train_from_texts(texts, resume_from_checkpoint=resume_from_checkpoint, **training_kwargs)
 
+    def train_from_hf(
+        self, 
+        dataset_key: str, 
+        max_samples: Optional[int] = None, 
+        split: str = "train",
+        resume_from_checkpoint: bool = False,
+        **training_kwargs
+    ) -> Dict[str, Any]:
+        """Downloads a dataset from Hugging Face and uses it for training."""
+        from src.data.dataset_downloader import DatasetDownloader
+        
+        self.logger.info(f"Hugging Face dataseti indiriliyor: {dataset_key}...")
+        downloader = DatasetDownloader()
+        
+        try:
+            conversations = downloader.download_dataset(dataset_key, max_samples=max_samples, split=split)
+            if not conversations:
+                raise ValueError(f"Dataset {dataset_key} boş döndü veya uygun formatta değil.")
+                
+            self.logger.info(f"Hugging Face dataseti başarıyla indirildi: {len(conversations)} örnek.")
+            return self.train_from_conversations(conversations, resume_from_checkpoint=resume_from_checkpoint, **training_kwargs)
+        except Exception as e:
+            self.logger.error(f"HF dataset eğitim hatası: {e}")
+            raise
+
     def train_from_pool(
         self, pool: List[Dict[str, Any]], resume_from_checkpoint: bool = False, **training_kwargs
     ) -> Dict[str, Any]:
@@ -406,6 +431,23 @@ class LoRATrainer:
                     pack_sequences=pack_sequences,
                 )
                 datasets.append(ds)
+            elif data_type == "huggingface":
+                from src.data.dataset_downloader import DatasetDownloader
+                downloader = DatasetDownloader()
+                self.logger.info(f"HF Dataset çekiliyor: {name}")
+                convs = downloader.download_dataset(
+                    item.get("dataset_key", data), 
+                    max_samples=item.get("max_samples"),
+                    split=item.get("split", "train")
+                )
+                if convs:
+                    ds = ConversationDataset(
+                        conversations=convs,
+                        tokenizer=self.model_manager.tokenizer,
+                        max_length=max_length,
+                        pack_sequences=pack_sequences,
+                    )
+                    datasets.append(ds)
             else:
                 self.logger.warning(f"Bilinmeyen veri tipi: {data_type}, atlanıyor.")
                 
