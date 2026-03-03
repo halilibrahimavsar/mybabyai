@@ -231,15 +231,29 @@ class ModelManager:
         self.logger.info(f"Model başarıyla yüklendi: {self.model_name}")
         return self.model, self.tokenizer
 
-    def load_fresh_model(self) -> Tuple[Any, Any]:
-        """Loads a completely untrained CodeMind model from scratch."""
+    def load_fresh_model(self, size: str = "125M") -> Tuple[Any, Any]:
+        """Loads a completely untrained CodeMind model from scratch.
+        
+        Args:
+            size: Model size configuration ('125M', '350M', '650M')
+        """
         from src.core.codemind_adapter import CodeMindAdapter
         from src.core.tokenizer.code_tokenizer import CodeTokenizer
         from src.core.model.codemind import CodeMindConfig, CodeMindForCausalLM
         
-        self.logger.info("Sıfırdan (eğitilmemiş) CodeMind model oluşturuluyor...")
+        size = size.upper()
+        self.logger.info(f"Sıfırdan (eğitilmemiş) CodeMind-{size} model oluşturuluyor...")
+        
+        # Architecture presets
+        if size == "350M":
+            hidden_size, layers, heads = 1024, 24, 16
+        elif size == "650M":
+            hidden_size, layers, heads = 1280, 24, 20
+        else: # Default 125M
+            hidden_size, layers, heads = 768, 12, 12
+            
         self.is_codemind = True
-        self.model_name = "CodeMind-125M (Sıfır Model)"
+        self.model_name = f"CodeMind-{size} (Sıfır Model)"
         self.is_fine_tuned = False
         
         self.codemind_adapter = CodeMindAdapter(self.config)
@@ -254,22 +268,21 @@ class ModelManager:
             
         config = CodeMindConfig(
             vocab_size=self.tokenizer.vocab_size_actual,
-            hidden_size=768,
-            num_hidden_layers=12,
-            num_attention_heads=12,
-            intermediate_size=768 * 4,
+            hidden_size=hidden_size,
+            num_hidden_layers=layers,
+            num_attention_heads=heads,
+            intermediate_size=hidden_size * 4,
             max_position_embeddings=2048
         )
         self.model = CodeMindForCausalLM(config)
-        # Safely move the model to device — if CUDA is unavailable at runtime,
-        # self.device was already corrected to 'cpu' in _get_device.
+        
         safe_device = self.device
         self.model = self.model.to(safe_device).eval()
         
         self.codemind_adapter.model = self.model
         self.codemind_adapter.tokenizer = self.tokenizer
         
-        self.logger.info("Sıfır model başarıyla oluşturuldu.")
+        self.logger.info(f"Sıfır {size} model başarıyla oluşturuldu.")
         return self.model, self.tokenizer
 
     def _setup_lora(self) -> None:
