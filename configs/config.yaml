@@ -28,7 +28,7 @@ model:
     - checkpoints
     - checkpoints_instruct
     min_compatibility_ratio: 0.6
-  default_model: codemind/checkpoints_instruct/model_best.pt
+  default_model: CodeMind-125M
   device: cuda
   load_in_4bit: false
   lora:
@@ -42,10 +42,10 @@ model:
     - o_proj
   max_memory: 10GB
   model_path: models/
-  name: codemind/checkpoints_instruct/model_best.pt
+  name: CodeMind-125M
 training:
   gradient_accumulation_steps: 1
-  gradient_checkpointing: auto
+  gradient_checkpointing: true
   learning_rate: 0.0002
   logging_steps: 10
   max_length: 256

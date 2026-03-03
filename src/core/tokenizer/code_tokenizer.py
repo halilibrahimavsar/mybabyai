@@ -736,7 +736,10 @@ class CodeTokenizer:
 
     def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
         if self.tokenizer is not None:
-            return self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+            text = self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+            # Clean up ByteLevel BPE artifacts
+            text = text.replace("Ġ", " ").replace("Ċ", "\n").replace("ĉ", "\t")
+            return text
 
         id_to_token = {v: k for k, v in self.vocab.items()}
 

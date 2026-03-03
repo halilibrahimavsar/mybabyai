@@ -72,25 +72,37 @@ class ModelManager:
             bnb_4bit_use_double_quant=True,
         )
 
-    def _load_codemind(self, checkpoint_path: Optional[str] = None) -> Tuple[Any, Any]:
+    def _load_codemind(
+        self, checkpoint_path: Optional[str] = None, allow_fresh_fallback: bool = False
+    ) -> Tuple[Any, Any]:
         from src.core.codemind_adapter import CodeMindAdapter
 
         self.logger.info("CodeMind model yükleniyor...")
         self.is_codemind = True
 
         self.codemind_adapter = CodeMindAdapter(self.config)
-        self.model, self.tokenizer, report = self.codemind_adapter.load_model(checkpoint_path)
-        
-        # If a path was provided, use the filename as model name
-        if checkpoint_path:
-            self.model_name = Path(checkpoint_path).name
-        else:
-            self.model_name = "CodeMind-125M"
+        try:
+            self.model, self.tokenizer, report = self.codemind_adapter.load_model(
+                checkpoint_path
+            )
+
+            # If a path was provided, use the filename as model name
+            if checkpoint_path:
+                self.model_name = Path(checkpoint_path).name
+            else:
+                self.model_name = "CodeMind-125M"
+        except FileNotFoundError as e:
+            if allow_fresh_fallback:
+                self.logger.warning(
+                    f"Checkpoint bulunamadı ({e}). Sıfır (eğitilmemiş) model ile devam ediliyor..."
+                )
+                return self.load_fresh_model()
+            raise e
 
         self.logger.info(f"CodeMind model başarıyla yüklendi: {self.model_name}")
-        
+
         self._check_and_load_adapter()
-        
+
         return self.model, self.tokenizer
 
     def _check_and_load_adapter(self) -> None:
@@ -163,13 +175,16 @@ class ModelManager:
         model_name: Optional[str] = None,
         load_lora: bool = False,
         lora_path: Optional[str] = None,
+        allow_fresh_fallback: bool = False,
     ) -> Tuple[Any, Any]:
         self.model_name = self.resolve_model_name(model_name)
-        
+
         # Handle CodeMind specifically
         if "codemind" in self.model_name.lower() or self.model_name.endswith(".pt"):
             checkpoint_path = self.model_name if self.model_name.endswith(".pt") else None
-            return self._load_codemind(checkpoint_path)
+            return self._load_codemind(
+                checkpoint_path, allow_fresh_fallback=allow_fresh_fallback
+            )
         
         # Generic HuggingFace Model Loading
         self.logger.info(f"HuggingFace model yükleniyor: {self.model_name}...")

@@ -212,7 +212,9 @@ class CodeMindAdapter:
         if checkpoint_path is None or not checkpoint_path.exists():
             searched = ", ".join(str(p) for p in self._checkpoint_dirs)
             raise FileNotFoundError(
-                f"CodeMind checkpoint not found at {checkpoint_path}. Searched directories: {searched}"
+                f"CodeMind checkpoint not found at {checkpoint_path}. Searched directories: {searched}. "
+                "If you are in a fresh environment (e.g. Colab), please ensure checkpoints are uploaded to 'codemind/checkpoints/' "
+                "or set allow_fresh_fallback=True in ModelManager.load_model() to train from scratch."
             )
 
         self.logger.info(f"Loading CodeMind model from: {checkpoint_path}")

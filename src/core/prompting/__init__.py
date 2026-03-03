@@ -38,6 +38,9 @@ CORRUPTED_PROMPT_LITERALS = (
 
 def normalize_prompt_text(text: str) -> str:
     """Normalize known legacy markers to canonical prompt tokens."""
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
+        
     normalized = text.replace("<|assistant|/>", TOKENS.assistant)
     normalized = normalized.replace("<|assistant|:", TOKENS.assistant)
     normalized = re.sub(r"<\|assistant\|(?!>)", TOKENS.assistant, normalized)
