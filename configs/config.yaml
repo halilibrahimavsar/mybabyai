@@ -48,7 +48,7 @@ training:
   gradient_checkpointing: true
   learning_rate: 0.0002
   logging_steps: 10
-  max_length: 256
+  max_length: 1024
   num_train_epochs: 3
   optim: adamw_torch
   output_dir: models/fine_tuned

@@ -26,7 +26,7 @@ from src.core.training.meta_learning import MAMLTrainer, MAMLConfig, TaskSampler
 from src.core.training.active_learning import ActiveLearner, ContinuousLearningPipeline
 
 
-from src.core.callbacks import UIProgressCallback, StopCallback
+from src.core.callbacks import UIProgressCallback, StopCallback, NotebookProgressCallback
 from src.core.datasets import TextDataset, ConversationDataset
 
 
@@ -131,6 +131,7 @@ class LoRATrainer:
 
         # Use lower LR and cosine schedule for more stable training
         is_codemind = self.model_manager.is_codemind
+        # DEFAULT optimization: 5e-5 for codemind, 2e-4 for others
         default_lr = 5e-5 if is_codemind else 2e-4
         
         # CPU Optimization settings
@@ -147,7 +148,7 @@ class LoRATrainer:
             isinstance(gradient_checkpointing_setting, str)
             and gradient_checkpointing_setting.lower() == "auto"
         ):
-            gradient_checkpointing = False
+            gradient_checkpointing = is_codemind  # Enable by default for CodeMind
         else:
             gradient_checkpointing = bool(gradient_checkpointing_setting)
 
@@ -460,6 +461,7 @@ class LoRATrainer:
         return self._train(combined_dataset, resume_from_checkpoint=resume_from_checkpoint, **training_kwargs)
 
     def _train(self, dataset: Dataset, resume_from_checkpoint: bool = False, **kwargs) -> Dict[str, Any]:
+        use_notebook_callback = kwargs.pop("use_notebook_callback", False)
         self.create_training_args(**kwargs)
 
         data_collator = DataCollatorForLanguageModeling(
@@ -472,6 +474,9 @@ class LoRATrainer:
         if self.progress_callback:
             callbacks.append(UIProgressCallback(self.progress_callback))
         
+        if use_notebook_callback:
+            callbacks.append(NotebookProgressCallback())
+
         # Add stop callback
         self.should_stop = False
         callbacks.append(StopCallback(lambda: self.should_stop))
