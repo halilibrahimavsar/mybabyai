@@ -415,6 +415,12 @@ class CodeMindAdapter:
                     f"{og_key} -> {key} (checkpoint: {tuple(value.shape)} vs model: {tuple(model_state[key].shape)})"
                 )
 
+        # Handle weight tying: if lm_head.weight is missing but word_embeddings.weight is present
+        if "lm_head.weight" not in filtered_state and "word_embeddings.weight" in filtered_state:
+            if "lm_head.weight" in model_state:
+                filtered_state["lm_head.weight"] = filtered_state["word_embeddings.weight"]
+                matched_keys += 1
+
         report = self._build_compatibility_report(
             checkpoint_path=checkpoint_path,
             state_dict=state_dict,

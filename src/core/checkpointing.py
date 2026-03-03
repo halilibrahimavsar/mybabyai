@@ -47,8 +47,16 @@ def build_checkpoint_metadata(
     architecture_version: str = "codemind-v2",
 ) -> CheckpointMetadata:
     vocab_size = int(model_config.get("vocab_size", 0))
-    if tokenizer is not None and hasattr(tokenizer, "vocab_size_actual"):
-        vocab_size = int(tokenizer.vocab_size_actual)
+    tok_vocab = 0
+    if tokenizer is not None:
+        if hasattr(tokenizer, "vocab_size_actual"):
+            tok_vocab = int(tokenizer.vocab_size_actual)
+        elif hasattr(tokenizer, "vocab_size"):
+            tok_vocab = int(tokenizer.vocab_size)
+        elif hasattr(tokenizer, "__len__"):
+            tok_vocab = len(tokenizer)
+            
+    vocab_size = max(vocab_size, tok_vocab)
 
     special_tokens: Any = []
     if tokenizer is not None and hasattr(tokenizer, "special_tokens"):
