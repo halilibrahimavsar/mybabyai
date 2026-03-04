@@ -173,11 +173,8 @@ class LoRATrainer:
             gradient_checkpointing = bool(gradient_checkpointing_setting)
 
         if self.model_manager.device == "cuda":
-            # 8-bit optimizer is memory efficient for LoRA but can cause divergence in full training.
-            if is_full_training:
-                default_optim = "adamw_torch"
-            else:
-                default_optim = "paged_adamw_8bit" if use_4bit else "adamw_torch"
+            # Always use 8-bit optimizer on GPU — saves ~50% optimizer memory
+            default_optim = "paged_adamw_8bit"
         else:
             default_optim = "adamw_torch"
 
@@ -226,9 +223,9 @@ class LoRATrainer:
             report_to="none",
             remove_unused_columns=False,
             ddp_find_unused_parameters=False,
-            dataloader_num_workers=cpu_count if cpu_count else 4,
+            dataloader_num_workers=self._get_safe_num_workers(cpu_count),
             dataloader_pin_memory=True if torch.cuda.is_available() else False,
-            dataloader_prefetch_factor=2,
+            dataloader_prefetch_factor=2 if self._get_safe_num_workers(cpu_count) > 0 else None,
             tf32=True if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else False,
             torch_compile=(
                 bool(use_torch_compile)
@@ -248,6 +245,14 @@ class LoRATrainer:
         )
 
         return self.training_args
+
+    def _get_safe_num_workers(self, cpu_count: int) -> int:
+        """On low-VRAM GPUs (Colab/Kaggle), use 0 workers to save RAM."""
+        if torch.cuda.is_available():
+            gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            if gpu_mem_gb <= 16.0:
+                return 0  # Multiprocessing workers eat ~1-2 GB RAM each
+        return cpu_count if cpu_count else 2
 
 
     def train_from_texts(
@@ -406,6 +411,16 @@ class LoRATrainer:
                 ),
             )
         )
+
+        # Auto-cap max_length for low-VRAM GPUs (T4 = 15GB, P100 = 16GB)
+        if torch.cuda.is_available():
+            gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            if gpu_mem_gb <= 16.0 and max_length > 128:
+                self.logger.warning(
+                    f"Düşük VRAM ({gpu_mem_gb:.0f} GB) algılandı. "
+                    f"max_length {max_length} → 128 olarak kısıtlandı (OOM önleme)."
+                )
+                max_length = 128
         pack_sequences = bool(
             training_kwargs.pop(
                 "pack_sequences", self.config.get("training.pack_sequences", True)
@@ -526,6 +541,32 @@ class LoRATrainer:
     def _train(self, dataset: Dataset, resume_from_checkpoint: bool = False, **kwargs) -> Dict[str, Any]:
         use_notebook_callback = kwargs.pop("use_notebook_callback", False)
         self.create_training_args(**kwargs)
+
+        # ── Aggressive memory optimization ──
+        import gc
+        import os as _os
+
+        # Set PyTorch memory allocator to prevent fragmentation
+        _os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        # Explicitly enable gradient checkpointing on the model for VRAM savings
+        model = self.model_manager.model
+        if self.training_args.gradient_checkpointing:
+            if hasattr(model, "gradient_checkpointing_enable"):
+                model.gradient_checkpointing_enable()
+                self.logger.info("Gradient checkpointing etkinleştirildi (VRAM tasarrufu).")
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+
+        # Log VRAM status before training
+        if torch.cuda.is_available():
+            gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            free_mem = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1e9
+            self.logger.info(f"GPU VRAM: {gpu_mem_gb:.1f} GB toplam, {free_mem:.1f} GB boş")
 
         data_collator = DataCollatorForLanguageModeling(
             tokenizer=self.model_manager.tokenizer,
