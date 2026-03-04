@@ -412,15 +412,24 @@ class LoRATrainer:
             )
         )
 
-        # Auto-cap max_length for low-VRAM GPUs (T4 = 15GB, P100 = 16GB)
+        # Auto-cap max_length for low-VRAM GPUs
+        # T4 = 15GB → cap at 128 (very tight for 1.4B MoE full train)
+        # P100 = 16GB → cap at 256 (enough headroom with grad_ckpt + batch=1)
+        # A100/V100 = 40/80 GB → no cap needed
         if torch.cuda.is_available():
             gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-            if gpu_mem_gb <= 16.0 and max_length > 128:
+            if gpu_mem_gb <= 12.0 and max_length > 128:
                 self.logger.warning(
                     f"Düşük VRAM ({gpu_mem_gb:.0f} GB) algılandı. "
                     f"max_length {max_length} → 128 olarak kısıtlandı (OOM önleme)."
                 )
                 max_length = 128
+            elif gpu_mem_gb <= 17.0 and max_length > 256:
+                self.logger.warning(
+                    f"Orta VRAM ({gpu_mem_gb:.0f} GB) algılandı. "
+                    f"max_length {max_length} → 256 olarak kısıtlandı (OOM önleme)."
+                )
+                max_length = 256
         pack_sequences = bool(
             training_kwargs.pop(
                 "pack_sequences", self.config.get("training.pack_sequences", True)
