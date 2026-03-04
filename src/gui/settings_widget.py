@@ -98,48 +98,23 @@ class SettingsWidget(QWidget):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        model_group = QGroupBox("Model Yapılandırması")
-        model_group.setStyleSheet(self._group_style())
-        model_layout = QFormLayout(model_group)
-
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self._refresh_model_list()
-        model_layout.addRow("Seçili Model:", self.model_combo)
+        # App & Hardware Settings
+        hardware_group = QGroupBox("Donanım Ayarları")
+        hardware_group.setStyleSheet(self._group_style())
+        hardware_layout = QFormLayout(hardware_group)
 
         self.device_combo = QComboBox()
         self.device_combo.addItems(["auto", "cuda", "mps", "cpu"])
-        model_layout.addRow("Cihaz:", self.device_combo)
+        hardware_layout.addRow("Cihaz:", self.device_combo)
 
         self.quantize_check = QCheckBox("4-bit Quantization (QLoRA)")
         self.quantize_check.setChecked(True)
-        model_layout.addRow("", self.quantize_check)
+        hardware_layout.addRow("", self.quantize_check)
 
         self.max_memory_edit = QLineEdit("8GB")
-        model_layout.addRow("Maksimum Bellek:", self.max_memory_edit)
+        hardware_layout.addRow("Maksimum Bellek:", self.max_memory_edit)
 
-        layout.addWidget(model_group)
-
-        lora_group = QGroupBox("LoRA Yapılandırması")
-        lora_group.setStyleSheet(self._group_style())
-        lora_layout = QFormLayout(lora_group)
-
-        self.lora_r_spin = QSpinBox()
-        self.lora_r_spin.setRange(1, 128)
-        self.lora_r_spin.setValue(16)
-        lora_layout.addRow("r (Rank):", self.lora_r_spin)
-
-        self.lora_alpha_spin = QSpinBox()
-        self.lora_alpha_spin.setRange(1, 256)
-        self.lora_alpha_spin.setValue(32)
-        lora_layout.addRow("Alpha:", self.lora_alpha_spin)
-
-        self.lora_dropout_spin = QDoubleSpinBox()
-        self.lora_dropout_spin.setRange(0.0, 0.5)
-        self.lora_dropout_spin.setValue(0.05)
-        lora_layout.addRow("Dropout:", self.lora_dropout_spin)
-
-        layout.addWidget(lora_group)
+        layout.addWidget(hardware_group)
 
         # Removed redundant model loading buttons and info - Now handled by Model Hub
         layout.addStretch()
@@ -308,18 +283,9 @@ class SettingsWidget(QWidget):
         self._update_memory_stats()
 
     def _load_settings(self) -> None:
-        default_model = self.config.get("model.name", "CodeMind-125M")
-        self.model_combo.setEditText(default_model)
-        
         self.device_combo.setCurrentText(self.config.get("model.device", "auto"))
         self.quantize_check.setChecked(self.config.get("model.load_in_4bit", True))
         self.max_memory_edit.setText(self.config.get("model.max_memory", "8GB"))
-
-        self.lora_r_spin.setValue(self.config.get("model.lora.r", 16))
-        self.lora_alpha_spin.setValue(self.config.get("model.lora.lora_alpha", 32))
-        self.lora_dropout_spin.setValue(
-            self.config.get("model.lora.lora_dropout", 0.05)
-        )
 
         self.embedding_model_combo.setEditText(
             self.config.get("memory.embedding_model", "")
@@ -329,16 +295,9 @@ class SettingsWidget(QWidget):
         self.max_history_spin.setValue(self.config.get("memory.max_history", 100))
 
     def _save_settings(self) -> None:
-        selected_model = self.model_combo.currentText()
-        self.config.set("model.name", selected_model)
-        self.config.set("model.default_model", selected_model)
         self.config.set("model.device", self.device_combo.currentText())
         self.config.set("model.load_in_4bit", self.quantize_check.isChecked())
         self.config.set("model.max_memory", self.max_memory_edit.text())
-
-        self.config.set("model.lora.r", self.lora_r_spin.value())
-        self.config.set("model.lora.lora_alpha", self.lora_alpha_spin.value())
-        self.config.set("model.lora.lora_dropout", self.lora_dropout_spin.value())
 
         self.config.set(
             "memory.embedding_model", self.embedding_model_combo.currentText()
@@ -348,8 +307,6 @@ class SettingsWidget(QWidget):
         self.config.set("memory.max_history", self.max_history_spin.value())
 
         self.config.save()
-        QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi!")
-
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi!")
 
     def _add_document(self) -> None:

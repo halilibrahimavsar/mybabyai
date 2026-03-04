@@ -391,7 +391,8 @@ class TrainerWidget(QWidget):
         self._training_type_combo.currentIndexChanged.connect(self._on_training_type_changed)
 
         self._epochs_spin = _spin(1, 100, self.config.get("training.num_epochs", 3))
-        self._batch_spin = _spin(1, 32, self.config.get("training.batch_size", 4))
+        self._batch_spin = _spin(1, 4096, self.config.get("training.per_device_train_batch_size", 4))
+        self._grad_acc_spin = _spin(1, 128, self.config.get("training.gradient_accumulation_steps", 1))
         self._lr_dspin = _dspin(0.00001, 0.1, self.config.get("training.learning_rate", 2e-4))
         self._lora_r_spin = _spin(1, 128, self.config.get("model.lora.r", 16))
         self._max_steps_spin = _spin(-1, 100000, self.config.get("training.max_steps", -1))
@@ -400,6 +401,7 @@ class TrainerWidget(QWidget):
             ("Eğitim Tipi", self._training_type_combo),
             ("Epoch", self._epochs_spin),
             ("Batch Boyutu", self._batch_spin),
+            ("Grad. Biriktirme", self._grad_acc_spin),
             ("Öğr. Hızı", self._lr_dspin),
             ("LoRA Rank (r)", self._lora_r_spin),
             ("Maks. Adım (-1=∞)", self._max_steps_spin),
@@ -668,8 +670,9 @@ class TrainerWidget(QWidget):
 
     def _collect_training_config(self) -> Dict[str, Any]:
         return {
-            "num_epochs": self._epochs_spin.value(),
-            "batch_size": self._batch_spin.value(),
+            "num_train_epochs": self._epochs_spin.value(),
+            "per_device_train_batch_size": self._batch_spin.value(),
+            "gradient_accumulation_steps": self._grad_acc_spin.value(),
             "learning_rate": self._lr_dspin.value(),
             "lora_r": self._lora_r_spin.value(),
             "max_steps": self._max_steps_spin.value() if self._max_steps_spin.value() != -1 else None,

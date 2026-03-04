@@ -248,11 +248,24 @@ I need to search the repo to find the file.
                 response = "".join(response_chunks).strip()
                 self.thought_process = response
 
-            json_text = response
-            if "```json" in response:
-                json_text = response.split("```json")[1].split("```")[0].strip()
-            elif "```" in response:
-                json_text = response.split("```")[1].split("```")[0].strip()
+            # Clean MCTS artifacts (Step N:, <thought> tags) from the response
+            import re as _re
+            clean_response = response
+            # Remove Step N: prefixes from MCTS thought chains
+            clean_response = _re.sub(r'Step \d+:\s*', '', clean_response)
+            # Remove <thought>...</thought> tags
+            clean_response = _re.sub(r'</?thought>', '', clean_response)
+
+            json_text = clean_response
+            if "```json" in clean_response:
+                json_text = clean_response.split("```json")[1].split("```")[0].strip()
+            elif "```" in clean_response:
+                json_text = clean_response.split("```")[1].split("```")[0].strip()
+            # Try to find a JSON array even without code fences
+            elif "[" in clean_response:
+                start = clean_response.index("[")
+                end = clean_response.rindex("]") + 1
+                json_text = clean_response[start:end]
             
             calls = json.loads(json_text)
             if isinstance(calls, list):

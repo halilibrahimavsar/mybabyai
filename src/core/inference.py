@@ -59,20 +59,60 @@ class InferenceEngine:
         self.config = config or Config()
         self.logger = get_logger("inference")
 
-        self.system_prompt = """Sen yardımsever, bilgili ve nazik bir AI asistanısın. 
-Kullanıcılara Türkçe ve diğer dillerde yardımcı oluyorsun.
-Sorulara detaylı ve doğru cevaplar veriyorsun.
-Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
-
-        self.max_new_tokens = 2048
-        self.temperature = 0.7
-        self.top_p = 0.95
-        self.top_k = 50
-        self.repetition_penalty = 1.1
+        # Read generation parameters from config (with sensible defaults)
+        self._load_settings_from_config()
 
         # Cognitive Engine Components
         self.router = CognitiveRouter()
-        self.reward_model = DualRewardEvaluator() # Base heuristic reward initially
+        self.reward_model = DualRewardEvaluator()  # Base heuristic reward initially
+
+        # Experience Buffer for saving successful System 2 thought chains
+        self.experience_buffer: Optional[Any] = None
+        if self.memory_manager:
+            try:
+                from src.core.cognitive.experience_buffer import ExperienceBuffer
+                self.experience_buffer = ExperienceBuffer(self.memory_manager)
+            except Exception:
+                self.logger.debug("ExperienceBuffer başlatılamadı (isteğe bağlı).")
+
+    def _load_settings_from_config(self) -> None:
+        """Load all generation parameters from the config file."""
+        default_prompt = (
+            "Sen yardımsever, bilgili ve nazik bir AI asistanısın. "
+            "Kullanıcılara Türkçe ve diğer dillerde yardımcı oluyorsun. "
+            "Sorulara detaylı ve doğru cevaplar veriyorsun. "
+            'Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun.'
+        )
+        self.system_prompt = self.config.get("inference.system_prompt", default_prompt)
+        self.max_new_tokens = self.config.get("generation.max_new_tokens", 2048)
+        self.temperature = self.config.get("generation.temperature", 0.7)
+        self.top_p = self.config.get("generation.top_p", 0.95)
+        self.top_k = self.config.get("generation.top_k", 50)
+        self.repetition_penalty = self.config.get("generation.repetition_penalty", 1.1)
+
+    def update_settings(
+        self,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        max_new_tokens: Optional[int] = None,
+        repetition_penalty: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+    ) -> None:
+        """Update generation parameters at runtime (called by Model Hub UI)."""
+        if temperature is not None:
+            self.temperature = temperature
+        if top_p is not None:
+            self.top_p = top_p
+        if top_k is not None:
+            self.top_k = top_k
+        if max_new_tokens is not None:
+            self.max_new_tokens = max_new_tokens
+        if repetition_penalty is not None:
+            self.repetition_penalty = repetition_penalty
+        if system_prompt is not None:
+            self.system_prompt = system_prompt
+        self.logger.info("Inference ayarları canlı olarak güncellendi.")
 
     def _lm_generate_multiple(self, context: str, n_samples: int) -> List[str]:
         """Wrapper to generate multiple subsequent possible thoughts for MCTS."""
@@ -161,7 +201,16 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
                 branching_factor=mode_config.branching_factor
             )
             initial_state = self.format_prompt(user_input, context, history)
-            return engine.search(initial_state)
+            result = engine.search(initial_state)
+
+            # Save successful System 2 thoughts to ExperienceBuffer
+            if self.experience_buffer and result:
+                avg_reward = self.reward_model.evaluate(initial_state, result)
+                self.experience_buffer.add_experience(
+                    query=user_input, thought_chain=result, reward=avg_reward,
+                )
+
+            return result
             
         self.logger.info("System 1 devrede. Hızlı yanıt üretiliyor...")
         prompt = self.format_prompt(user_input, context, history)
@@ -270,6 +319,13 @@ Bilmediğin konularda dürüstçe "bilmiyorum" diyorsun."""
             # Since MCTS returns the final output, stream it by yielding the whole text
             final_response = engine.search(initial_state)
             yield final_response
+
+            # Save successful System 2 thoughts to ExperienceBuffer
+            if self.experience_buffer and final_response:
+                avg_reward = self.reward_model.evaluate(initial_state, final_response)
+                self.experience_buffer.add_experience(
+                    query=user_input, thought_chain=final_response, reward=avg_reward,
+                )
             
             if use_memory and self.memory_manager:
                 self.memory_manager.add_conversation(user_input, final_response.strip())

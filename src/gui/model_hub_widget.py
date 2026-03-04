@@ -614,14 +614,34 @@ class ModelHubWidget(QWidget):
         self.refresh()
 
     def _apply_gen_settings(self) -> None:
-        self.config.set("generation.temperature", self._temp_slider.value() / 100)
-        self.config.set("generation.top_p", self._top_p_slider.value() / 100)
-        self.config.set("generation.max_new_tokens", self._max_tok_spin.value())
-        self.config.set("generation.top_k", self._top_k_spin.value())
-        self.config.set("generation.repetition_penalty", self._rep_pen_spin.value())
-        self.config.set("inference.system_prompt", self._sys_prompt_edit.text())
+        temperature = self._temp_slider.value() / 100
+        top_p = self._top_p_slider.value() / 100
+        max_new_tokens = self._max_tok_spin.value()
+        top_k = self._top_k_spin.value()
+        repetition_penalty = self._rep_pen_spin.value()
+        system_prompt = self._sys_prompt_edit.text()
+
+        self.config.set("generation.temperature", temperature)
+        self.config.set("generation.top_p", top_p)
+        self.config.set("generation.max_new_tokens", max_new_tokens)
+        self.config.set("generation.top_k", top_k)
+        self.config.set("generation.repetition_penalty", repetition_penalty)
+        self.config.set("inference.system_prompt", system_prompt)
         self.config.save()
-        self._action_status.setText("✓ Üretim ayarları kaydedildi.")
+
+        # BUG-3 Fix: Push new values to the live InferenceEngine instance
+        if hasattr(self, "main_window") and hasattr(self.main_window, "inference_engine") and self.main_window.inference_engine:
+            self.main_window.inference_engine.update_settings(
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                max_new_tokens=max_new_tokens,
+                repetition_penalty=repetition_penalty,
+                system_prompt=system_prompt,
+            )
+            self._action_status.setText("✓ Ayarlar kaydedildi ve canlı olarak uygulandı.")
+        else:
+            self._action_status.setText("✓ Ayarlar kaydedildi (model yüklenince geçerli olacak).")
 
     # -------------------------------------------------------------------
     # Helpers

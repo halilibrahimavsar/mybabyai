@@ -1,4 +1,3 @@
-import re
 import logging
 from typing import Optional
 
@@ -14,20 +13,34 @@ class CognitiveRouter:
     
     # Keywords indicating a need for deep logic or mathematical reasoning
     DEEPTHINK_KEYWORDS = [
+        # English
         "calculate", "prove", "theorem", "math", "equation", "logic puzzle",
-        "solve for", "integral", "derivative", "optimize", "algorithm complexity"
+        "solve for", "integral", "derivative", "optimize", "algorithm complexity",
+        # Turkish
+        "hesapla", "kanıtla", "teorem", "matematik", "denklem", "mantık bulmacası",
+        "çöz", "integral", "türev", "optimize et", "algoritma karmaşıklığı",
+        "ispat", "formül", "analiz et",
     ]
     
     # Keywords indicating a sequence of steps or complex code architecture
     PLAN_KEYWORDS = [
+        # English
         "plan", "step by step", "architecture", "design", "refactor",
-        "how to build", "strategy", "structure"
+        "how to build", "strategy", "structure",
+        # Turkish
+        "planla", "adım adım", "mimari", "tasarla", "yeniden yapılandır",
+        "nasıl yapılır", "strateji", "yapı", "düzenle", "oluştur",
+        "karşılaştır", "mukayese",
     ]
     
     # Keywords indicating a need to act upon the environment
     AGENT_KEYWORDS = [
+        # English
         "run command", "terminal", "execute", "read file", "write to file",
-        "search the web", "look up", "fix this error in my workspace"
+        "search the web", "look up", "fix this error in my workspace",
+        # Turkish
+        "komut çalıştır", "terminalde", "dosya oku", "dosyaya yaz",
+        "web'de ara", "hatayı düzelt", "çalıştır", "kodu düzelt",
     ]
 
     def __init__(self, force_mode: Optional[CognitiveMode] = None):
@@ -52,7 +65,8 @@ class CognitiveRouter:
 
     def _classify_prompt(self, prompt: str) -> CognitiveMode:
         """
-        Heuristic classification based on keywords and prompt length.
+        Heuristic classification based on keywords, prompt length,
+        question marks, and code-block presence.
         """
         # 1. Agent Mode Check (Environment Interaction)
         if any(kw in prompt for kw in self.AGENT_KEYWORDS):
@@ -66,8 +80,15 @@ class CognitiveRouter:
         if any(kw in prompt for kw in self.PLAN_KEYWORDS):
             return CognitiveMode.SYSTEM_2_PLAN
             
-        # 4. Length/Complexity heuristic feature
-        # If the prompt is very long, it likely requires more than a simple System 1 response
+        # 4. Code block presence → likely needs planning
+        if "```" in prompt or "def " in prompt or "class " in prompt:
+            return CognitiveMode.SYSTEM_2_PLAN
+            
+        # 5. Many question marks → analytical query
+        if prompt.count("?") >= 3:
+            return CognitiveMode.SYSTEM_2_PLAN
+
+        # 6. Length/Complexity heuristic
         word_count = len(prompt.split())
         if word_count > 100:
              return CognitiveMode.SYSTEM_2_PLAN

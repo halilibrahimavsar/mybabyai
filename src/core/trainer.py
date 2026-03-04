@@ -43,7 +43,7 @@ class LoRATrainer:
         self.should_stop = False
         self.current_training_type = "lora"
 
-    def prepare_model_for_training(self, training_type: str = "lora") -> None:
+    def prepare_model_for_training(self, training_type: str = "lora", **kwargs) -> None:
         self.current_training_type = training_type
         if self.model_manager.model is None:
             raise ValueError("Model yüklenmemiş")
@@ -106,9 +106,9 @@ class LoRATrainer:
                 self.logger.info(f"Yedek hedef modüller {verified_targets}")
 
             lora_config = LoraConfig(
-                r=self.config.get("model.lora.r", 16),
-                lora_alpha=self.config.get("model.lora.lora_alpha", 32),
-                lora_dropout=self.config.get("model.lora.lora_dropout", 0.05),
+                r=kwargs.get("lora_r", self.config.get("model.lora.r", 16)),
+                lora_alpha=kwargs.get("lora_alpha", self.config.get("model.lora.lora_alpha", 32)),
+                lora_dropout=kwargs.get("lora_dropout", self.config.get("model.lora.lora_dropout", 0.05)),
                 target_modules=verified_targets,
                 bias="none",
                 task_type="CAUSAL_LM",
@@ -261,7 +261,7 @@ class LoRATrainer:
             raise ValueError("Model ve tokenizer yüklenmiş olmalı")
 
         training_type = training_kwargs.pop("training_type", "lora")
-        self.prepare_model_for_training(training_type=training_type)
+        self.prepare_model_for_training(training_type=training_type, **training_kwargs)
         
         # If resuming, we don't necessarily need to reload PeftModel if it's already one,
         # HF Trainer will handle it from checkpoint.
@@ -310,7 +310,7 @@ class LoRATrainer:
             raise ValueError("Model ve tokenizer yüklenmiş olmalı")
 
         training_type = training_kwargs.pop("training_type", "lora")
-        self.prepare_model_for_training(training_type=training_type)
+        self.prepare_model_for_training(training_type=training_type, **training_kwargs)
 
         max_length = int(
             training_kwargs.pop(
@@ -395,7 +395,7 @@ class LoRATrainer:
             raise ValueError("Model ve tokenizer yüklenmiş olmalı")
 
         training_type = training_kwargs.pop("training_type", "lora")
-        self.prepare_model_for_training(training_type=training_type)
+        self.prepare_model_for_training(training_type=training_type, **training_kwargs)
 
         max_length = int(
             training_kwargs.pop(
