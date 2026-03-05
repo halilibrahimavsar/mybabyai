@@ -476,6 +476,84 @@ class ModelManager:
         self.logger.info(f"NightShift başlatılıyor (arka plan={background})...")
         ns.start_night_shift(background=background)
 
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 200,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.1,
+        do_sample: bool = True,
+    ) -> str:
+        """Generates text from the loaded model given a prompt.
+
+        Works with both CodeMind and HuggingFace-style models. The tokenizer
+        is automatically detected (CodeTokenizer vs AutoTokenizer).
+        """
+        if self.model is None or self.tokenizer is None:
+            raise ValueError("Model ve tokenizer yüklenmemiş. Önce load_model() çağırın.")
+
+        # CodeMind adapter'ın kendi generate metodu varsa ona delege et
+        if self.is_codemind and self.codemind_adapter and hasattr(self.codemind_adapter, "generate"):
+            return self.codemind_adapter.generate(
+                prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                do_sample=do_sample,
+            )
+
+        # Generic HuggingFace / PEFT path
+        self.model.eval()
+        with torch.no_grad():
+            # CodeTokenizer encode arayüzü
+            if hasattr(self.tokenizer, "encode") and not hasattr(self.tokenizer, "__call__"):
+                input_ids_list = self.tokenizer.encode(prompt)
+                input_ids = torch.tensor([input_ids_list], dtype=torch.long).to(self.device)
+                attention_mask = None
+            else:
+                encoding = self.tokenizer(
+                    prompt,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                )
+                input_ids = encoding["input_ids"].to(self.device)
+                attention_mask = encoding.get("attention_mask", None)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(self.device)
+
+            generate_kwargs: Dict[str, Any] = dict(
+                input_ids=input_ids,
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                pad_token_id=getattr(self.tokenizer, "pad_token_id", None)
+                    or getattr(self.tokenizer, "eos_token_id", 0),
+                eos_token_id=getattr(self.tokenizer, "eos_token_id", None),
+            )
+            if attention_mask is not None:
+                generate_kwargs["attention_mask"] = attention_mask
+
+            output_ids = self.model.generate(**generate_kwargs)
+
+        # Yalnızca üretilen yeni token'ları çöz
+        generated_ids = output_ids[0][input_ids.shape[-1]:]
+
+        if hasattr(self.tokenizer, "decode"):
+            # CodeTokenizer veya HF tokenizer — ikisi de decode'u destekler
+            result = self.tokenizer.decode(generated_ids.tolist())
+        else:
+            result = str(generated_ids.tolist())
+
+        return result.strip()
+
     def unload_model(self) -> None:
         if self.is_codemind and self.codemind_adapter:
             self.codemind_adapter.unload_model()
