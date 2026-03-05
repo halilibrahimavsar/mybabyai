@@ -4,6 +4,7 @@ transformers>=4.36.0
 accelerate>=0.25.0
 peft>=0.7.0
 bitsandbytes>=0.41.0
+# flash-attn>=2.5.0  # OPSİYONEL: Flash Attention 2 için. Kur: pip install flash-attn --no-build-isolation
 sentencepiece>=0.1.99
 tokenizers>=0.14.0
 

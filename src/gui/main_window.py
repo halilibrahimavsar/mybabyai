@@ -214,23 +214,6 @@ class SlimSidebar(QWidget):
             "idle":    "Model yüklenmedi",
         }
         self._status_dot.setToolTip(tip_map.get(status, ""))
-        
-        # Show model name label if available
-        if not hasattr(self, "_model_name_label"):
-            from PyQt6.QtWidgets import QLabel
-            self._model_name_label = QLabel("")
-            self._model_name_label.setStyleSheet("color: #94a3b8; font-size: 9px;")
-            # Insert after status dot
-            self.layout().addWidget(self._model_name_label)
-        
-        if model_name and status == "ready":
-            self._model_name_label.setText(model_name)
-            self._model_name_label.setStyleSheet("color: #22c55e; font-size: 9px; font-weight: bold;")
-        elif status == "loading" and model_name:
-            self._model_name_label.setText(f"{model_name}...")
-            self._model_name_label.setStyleSheet("color: #fbbf24; font-size: 9px;")
-        else:
-            self._model_name_label.setText("")
 
     def _set_status_color(self, color: str) -> None:
         self._status_dot.setStyleSheet(f"font-size: 18px; color: {color};")
@@ -431,7 +414,8 @@ class MainWindow(QMainWindow):
 
     def load_model(self, model_name: Optional[str] = None) -> bool:
         try:
-            self.status_bar.showMessage("Model yükleniyor...")
+            msg = f"Model yükleniyor... ({model_name})" if model_name else "Model yükleniyor..."
+            self.status_bar.showMessage(msg)
             self.sidebar.set_model_status("loading", model_name)
 
             if self.model_manager is None:
@@ -460,7 +444,7 @@ class MainWindow(QMainWindow):
         self.model_loaded = True
 
         self.sidebar.set_model_status("ready", self.model_manager.model_name)
-        self.status_bar.showMessage("Model hazır ✓")
+        self.status_bar.showMessage(f"Model hazır ✓ ({self.model_manager.model_name})")
 
         self.chat_widget.set_inference_engine(self.inference_engine)
         self.trainer_widget.set_trainer(self.trainer)

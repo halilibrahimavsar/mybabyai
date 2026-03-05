@@ -129,8 +129,8 @@ class GenerateThread(QThread):
             if self.stream:
                 full_response = ""
                 for text in self.inference_engine.generate_stream(
-                    self.user_input, 
-                    use_memory=True, 
+                    self.user_input,
+                    use_memory=True,
                     history=self.history,
                     mode_callback=mode_callback,
                 ):
@@ -140,9 +140,12 @@ class GenerateThread(QThread):
                     self.text_generated.emit(text)
                 self.finished.emit(full_response)
             else:
+                if self.isInterruptionRequested():
+                    self.finished.emit("")
+                    return
                 response = self.inference_engine.generate(
-                    self.user_input, 
-                    use_memory=True, 
+                    self.user_input,
+                    use_memory=True,
                     history=self.history,
                     mode_callback=mode_callback,
                 )
@@ -808,9 +811,9 @@ class ChatWidget(QWidget):
     def _stop_generation(self) -> None:
         if self.generate_thread and self.generate_thread.isRunning():
             self.generate_thread.requestInterruption()
-            if not self.generate_thread.wait(800):
-                self.generate_thread.terminate()
-                self.generate_thread.wait()
+            # Give the thread up to 3 seconds to finish gracefully.
+            # Do NOT call terminate() — it causes SIGABRT with Python threads.
+            self.generate_thread.wait(3000)
 
         if self.current_bubble and not self.current_response:
             self.current_bubble.set_text("Yanıt durduruldu.")
