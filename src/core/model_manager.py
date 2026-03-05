@@ -274,6 +274,16 @@ class ModelManager:
         else:
             self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
             
+        # Flash Attention / SDPA kontrolü:
+        # - "flash_attention_2" → use_flash_attention=True (flash-attn paketi kurulu olmalı)
+        # - "sdpa" veya "eager" → SDPA zaten default path, use_flash_attention=False
+        attn_impl = self.config.get("model.attn_implementation", "sdpa")
+        use_flash_attn = attn_impl == "flash_attention_2"
+        if use_flash_attn:
+            self.logger.info("Flash Attention 2 etkinleştiriliyor (mevcut değilse SDPA'ya düşer).")
+        else:
+            self.logger.info(f"Attention backend: {attn_impl} (PyTorch SDPA kullanılacak)")
+
         config = CodeMindConfig(
             vocab_size=self.tokenizer.vocab_size_actual,
             hidden_size=hidden_size,
@@ -282,7 +292,8 @@ class ModelManager:
             intermediate_size=hidden_size * 4,
             max_position_embeddings=4096,
             num_experts=experts,
-            num_experts_per_tok=experts_per_tok
+            num_experts_per_tok=experts_per_tok,
+            use_flash_attention=use_flash_attn,
         )
         self.model = CodeMindForCausalLM(config)
         
