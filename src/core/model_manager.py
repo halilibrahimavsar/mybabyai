@@ -252,8 +252,8 @@ class ModelManager:
         if size == "350M":
             hidden_size, layers, heads = 1024, 24, 16
         elif size == "350M-MOE":
-            hidden_size, layers, heads = 768, 24, 12
-            experts = 8
+            hidden_size, layers, heads = 448, 6, 8
+            experts = 4
             experts_per_tok = 2
         elif size == "650M":
             hidden_size, layers, heads = 1280, 24, 20

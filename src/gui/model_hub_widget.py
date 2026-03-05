@@ -283,6 +283,64 @@ class ModelHubWidget(QWidget):
         )
         lay.addWidget(act_title)
 
+        # ---- Hugging Face Open Source Models ----
+        hf_frame = QFrame()
+        hf_frame.setStyleSheet("""
+            QFrame {
+                background: #0f172a;
+                border: 1px solid #1e3a5f;
+                border-radius: 10px;
+            }
+        """)
+        hf_lay = QVBoxLayout(hf_frame)
+        hf_lay.setContentsMargins(14, 14, 14, 14)
+        hf_lay.setSpacing(10)
+
+        hf_title = QLabel("🌐  Açık Kaynak Modeller (Hugging Face)")
+        hf_title.setStyleSheet("font-size: 13px; font-weight: 600; color: #3b82f6;")
+        hf_lay.addWidget(hf_title)
+
+        hint_hf = QLabel("Aşağıdaki modellerden birini seçerek veya bir model ID'si yapıştırarak doğrudan indirebilir ve yükleyebilirsiniz.")
+        hint_hf.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        hint_hf.setWordWrap(True)
+        hf_lay.addWidget(hint_hf)
+
+        from PyQt6.QtWidgets import QComboBox
+        self._hf_model_combo = QComboBox()
+        self._hf_model_combo.setEditable(True)
+        hf_models = [
+            "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "Qwen/Qwen2.5-Coder-3B-Instruct",
+            "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+            "deepseek-ai/deepseek-coder-1.3b-instruct",
+            "meta-llama/Llama-3.2-3B-Instruct",
+            "microsoft/phi-2"
+        ]
+        self._hf_model_combo.addItems(hf_models)
+        self._hf_model_combo.setStyleSheet("""
+            QComboBox {
+                background: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #e2e8f0;
+                font-size: 12px;
+            }
+            QComboBox:drop-down {
+                border-left: 1px solid #334155;
+                width: 20px;
+            }
+        """)
+        hf_lay.addWidget(self._hf_model_combo)
+
+        self._download_hf_btn = QPushButton("☁️  Modeli İndir ve Yükle")
+        self._download_hf_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._download_hf_btn.clicked.connect(self._download_and_load_hf_model)
+        self._download_hf_btn.setStyleSheet(self._btn_style("#0369a1")) # Dark Blue
+        hf_lay.addWidget(self._download_hf_btn)
+
+        lay.addWidget(hf_frame)
+
         actions_frame = QFrame()
         actions_frame.setStyleSheet("""
             QFrame {
@@ -532,6 +590,33 @@ class ModelHubWidget(QWidget):
         self._load_thread.error.connect(self._on_action_error)
         self._load_thread.start()
 
+    def _download_and_load_hf_model(self) -> None:
+        model_id = self._hf_model_combo.currentText().strip()
+        if not model_id:
+            QMessageBox.warning(self, "Uyarı", "Lütfen geçerli bir Hugging Face model ID'si girin.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Modeli İndir/Yükle",
+            f"Şu Hugging Face modeli indirilecek veya yüklenecek:\n\n{model_id}\n\nBu işlem model bilgisayarda yoksa indirme yapacağı için biraz sürebilir. Devam edilsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._set_busy(True, f"Model hazırlanıyor: {model_id} (İndiriliyor olabilir...)")
+        if self._mm is None:
+            self.main_window.model_manager = __import__(
+                "src.core.model_manager", fromlist=["ModelManager"]
+            ).ModelManager(self.config)
+            self._mm = self.main_window.model_manager
+
+        self._load_thread = _LoadThread(self._mm, model_id)
+        self._load_thread.finished.connect(self._on_load_finished)
+        self._load_thread.error.connect(self._on_action_error)
+        self._load_thread.start()
+
     def _on_load_finished(self) -> None:
         self._set_busy(False)
         self.refresh()
@@ -655,8 +740,9 @@ class ModelHubWidget(QWidget):
     def _set_busy(self, busy: bool, msg: str = "") -> None:
         self._progress.setVisible(busy)
         self._action_status.setText(msg)
-        for btn in [self._merge_btn, self._nightshift_btn, self._load_ckpt_btn, self._new_model_btn]:
+        for btn in [self._merge_btn, self._nightshift_btn, self._load_ckpt_btn, self._new_model_btn, self._download_hf_btn]:
             btn.setEnabled(not busy)
+        self._hf_model_combo.setEnabled(not busy)
 
     @staticmethod
     def _btn_style(bg: str) -> str:
