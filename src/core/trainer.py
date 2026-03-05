@@ -173,8 +173,23 @@ class LoRATrainer:
             gradient_checkpointing = bool(gradient_checkpointing_setting)
 
         if self.model_manager.device == "cuda":
-            # Always use 8-bit optimizer on GPU — saves ~50% optimizer memory
-            default_optim = "paged_adamw_8bit"
+            # GPU capability-aware optimizer selection:
+            # - SM70+ (Volta: V100, T4, A100, RTX3090+) → paged_adamw_8bit (stable, saves ~60% optimizer VRAM)
+            # - SM60- (Pascal: P100) → adafactor (no separate m/v states, saves ~70% optimizer VRAM)
+            #   P100'de bitsandbytes paged ops desteklenmiyor, adamw_torch'a silent fallback yapıyor.
+            #   Adafactor tek 1st moment state kullanır → 1.4B model için ~5.6 GB yerine ~1.4 GB optimizer VRAM.
+            try:
+                sm_major = torch.cuda.get_device_capability()[0]
+            except Exception:
+                sm_major = 0
+            if sm_major >= 7:
+                default_optim = "paged_adamw_8bit"
+                self.logger.info(f"GPU SM{sm_major}x: paged_adamw_8bit optimizer seçildi.")
+            else:
+                # Pascal (SM60) ve altı: Adafactor kullan
+                # Adafactor'da ayrı m ve v state yoktur; parametre başına ~1 byte optimizer VRAM.
+                default_optim = "adafactor"
+                self.logger.info(f"GPU SM{sm_major}x (Pascal/older): Adafactor optimizer seçildi (düşük VRAM).")
         else:
             default_optim = "adamw_torch"
 
