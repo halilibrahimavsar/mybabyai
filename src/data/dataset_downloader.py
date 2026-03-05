@@ -181,6 +181,13 @@ class DatasetDownloader:
             "description": "Karmaşık mantık ve kod talimatları (EN)",
             "size": "Büyük (~200MB)",
             "languages": ["Kodlama", "Mantık"],
+        },
+        "tr_wikipedia": {
+            "name": "wikipedia",
+            "config": "20220301.tr",
+            "description": "Türkçe Wikipedia maddeleri (Bilgi külliyatı)",
+            "size": "Büyük",
+            "languages": ["Türkçe"],
         }
     }
 

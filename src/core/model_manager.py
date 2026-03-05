@@ -559,7 +559,12 @@ class ModelManager:
 
         if hasattr(self.tokenizer, "decode"):
             # CodeTokenizer veya HF tokenizer — ikisi de decode'u destekler
-            result = self.tokenizer.decode(generated_ids.tolist())
+            try:
+                result = self.tokenizer.decode(generated_ids.tolist(), skip_special_tokens=True)
+            except Exception as e:
+                # Decoding hatası durumunda ham token ID'lerini döndür veya hatalı kısmı temizle
+                print(f"Decoding hatası: {e}")
+                result = str(generated_ids.tolist())
         else:
             result = str(generated_ids.tolist())
 

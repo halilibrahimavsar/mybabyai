@@ -17,7 +17,7 @@ from collections import Counter
 import pickle
 
 try:
-    from tokenizers import Tokenizer, models, pre_tokenizers, trainers, processors
+    from tokenizers import Tokenizer, models, pre_tokenizers, trainers, processors, decoders
     from tokenizers.implementations import BaseTokenizer
     from tokenizers.models import BPE
 
@@ -669,6 +669,7 @@ class CodeTokenizer:
         tokenizer.train(files, trainer)
 
         tokenizer.post_processor = processors.ByteLevel(trim_offsets=True)
+        tokenizer.decoder = decoders.ByteLevel()
 
         self.tokenizer = tokenizer
         self.vocab = tokenizer.get_vocab()
@@ -737,8 +738,6 @@ class CodeTokenizer:
     def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
         if self.tokenizer is not None:
             text = self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
-            # Clean up ByteLevel BPE artifacts
-            text = text.replace("Ġ", " ").replace("Ċ", "\n").replace("ĉ", "\t")
             return text
 
         id_to_token = {v: k for k, v in self.vocab.items()}
@@ -795,6 +794,7 @@ class CodeTokenizer:
         tokenizer_path = path / "tokenizer.json"
         if tokenizer_path.exists() and TOKENIZERS_AVAILABLE:
             instance.tokenizer = Tokenizer.from_file(str(tokenizer_path))
+            instance.tokenizer.decoder = decoders.ByteLevel()
 
         return instance
 
