@@ -164,12 +164,6 @@ class DatasetDownloader:
             "size": "Büyük (~150MB)",
             "languages": ["Türkçe"],
         },
-        "trendyol_llm_instruct": {
-            "name": "Trendyol/Trendyol-LLM-Instruction-Subset-v1.0",
-            "description": "Trendyol tarafından temizlenmiş kaliteli TR set",
-            "size": "Orta (~50MB)",
-            "languages": ["Türkçe"],
-        },
         "code_feedback": {
             "name": "m-a-p-p-u/Code-Feedback",
             "description": "Kodlama üzerine interaktif geri bildirimler (EN)",
