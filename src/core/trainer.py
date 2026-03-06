@@ -427,24 +427,11 @@ class LoRATrainer:
             )
         )
 
-        # Auto-cap max_length for low-VRAM GPUs
-        # T4 = 15GB → cap at 128 (very tight for 1.4B MoE full train)
-        # P100 = 16GB → cap at 256 (enough headroom with grad_ckpt + batch=1)
-        # A100/V100 = 40/80 GB → no cap needed
+        # Auto-cap max_length for low-VRAM GPUs removed.
+        # User explicitly requested to handle OOM on their own.
         if torch.cuda.is_available():
             gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-            if gpu_mem_gb <= 12.0 and max_length > 128:
-                self.logger.warning(
-                    f"Düşük VRAM ({gpu_mem_gb:.0f} GB) algılandı. "
-                    f"max_length {max_length} → 128 olarak kısıtlandı (OOM önleme)."
-                )
-                max_length = 128
-            elif gpu_mem_gb <= 17.0 and max_length > 256:
-                self.logger.warning(
-                    f"Orta VRAM ({gpu_mem_gb:.0f} GB) algılandı. "
-                    f"max_length {max_length} → 256 olarak kısıtlandı (OOM önleme)."
-                )
-                max_length = 256
+            self.logger.info(f"GPU bellek hacmi: {gpu_mem_gb:.1f} GB. max_length {max_length} olarak bırakıldı.")
         pack_sequences = bool(
             training_kwargs.pop(
                 "pack_sequences", self.config.get("training.pack_sequences", True)
@@ -608,6 +595,50 @@ class LoRATrainer:
         # Add stop callback
         self.should_stop = False
         callbacks.append(StopCallback(lambda: self.should_stop))
+
+        from transformers import TrainerCallback
+        class CodeMindCheckpointCallback(TrainerCallback):
+            def __init__(self, trainer_wrapper):
+                self.trainer_wrapper = trainer_wrapper
+
+            def on_save(self, args, state, control, **kwargs):
+                try:
+                    import torch
+                    from pathlib import Path
+                    from src.core.checkpointing import build_checkpoint_metadata, attach_checkpoint_metadata
+                    
+                    checkpoint_dir = Path(args.output_dir)
+                    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    model = self.trainer_wrapper.model_manager.model
+                    if hasattr(model, "base_model"):
+                        raw_state_dict = model.base_model.model.state_dict()
+                    else:
+                        raw_state_dict = model.state_dict()
+                    
+                    state_dict = {k: v for k, v in raw_state_dict.items() if "lora_" not in k and "modules_to_save" not in k}
+                    checkpoint = {"model_state_dict": state_dict}
+                    
+                    config_dict = getattr(model, "config", None)
+                    config_data = config_dict.to_dict() if config_dict else {}
+                    
+                    metadata = build_checkpoint_metadata(
+                        model_config=config_data,
+                        tokenizer=self.trainer_wrapper.model_manager.tokenizer,
+                        tokenizer_type="pretrained",
+                        architecture_version="codemind-v2"
+                    )
+                    checkpoint = attach_checkpoint_metadata(checkpoint, metadata)
+                    
+                    # Kayıt formatı: model_final_200.pt
+                    step_path = checkpoint_dir / f"model_final_{state.global_step}.pt"
+                    torch.save(checkpoint, step_path)
+                    
+                    self.trainer_wrapper.logger.info(f"💾 Periyodik CodeMind formatı kaydedildi: {step_path}")
+                except Exception as e:
+                    self.trainer_wrapper.logger.error(f"Periyodik CodeMind yedekleme hatası: {e}")
+
+        callbacks.append(CodeMindCheckpointCallback(self))
 
         self.trainer = Trainer(
             model=self.model_manager.model,

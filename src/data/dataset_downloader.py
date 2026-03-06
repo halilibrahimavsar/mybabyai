@@ -188,6 +188,18 @@ class DatasetDownloader:
             "description": "Türkçe Wikipedia maddeleri (Bilgi külliyatı)",
             "size": "Büyük",
             "languages": ["Türkçe"],
+        },
+        "alpaca_gpt4_tr": {
+            "name": "malhajar/alpaca-gpt4-tr",
+            "description": "GPT-4 ile üretilmiş yüksek kaliteli Türkçe Alpaca seti",
+            "size": "Orta (~40MB)",
+            "languages": ["Türkçe"],
+        },
+        "open_orca_tr": {
+            "name": "ucekmez/OpenOrca-tr",
+            "description": "OpenOrca veri setinin Türkçe çevirisi (Yüksek kalite)",
+            "size": "Büyük (~100MB)",
+            "languages": ["Türkçe"],
         }
     }
 
