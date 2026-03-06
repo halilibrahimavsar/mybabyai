@@ -1,0 +1,26 @@
+{
+  "vocab_size": 16384,
+  "min_frequency": 2,
+  "special_tokens": [
+    "<|python|>",
+    "<|dart|>",
+    "<|javascript|>",
+    "<|code|>",
+    "<|comment|>",
+    "<|docstring|>",
+    "<|function|>",
+    "<|class|>",
+    "<|error|>",
+    "<|fix|>",
+    "<|explain|>",
+    "<|question|>",
+    "<|answer|>",
+    "<|context|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|system|>",
+    "<|pad|>",
+    "<|eos|>",
+    "<|unk|>"
+  ]
+}
