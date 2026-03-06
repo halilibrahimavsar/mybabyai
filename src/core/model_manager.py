@@ -268,11 +268,17 @@ class ModelManager:
         
         # Resolve tokenizer exactly as standard load does
         tokenizer_path = self.codemind_adapter._codemind_path / "tokenizer"
-        if not tokenizer_path.exists():
-            self.logger.warning(f"Tokenizer bulunamadı: {tokenizer_path}, varsayılan kullanılıyor.")
-            self.tokenizer = CodeTokenizer(vocab_size=32000)
-        else:
+        alt_path = self.codemind_adapter._codemind_path / "checkpoints" / "tokenizer"
+                
+        if tokenizer_path.exists():
             self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
+        elif alt_path.exists():
+            self.tokenizer = CodeTokenizer.load(str(alt_path))
+        else:
+            self.logger.warning(f"Tokenizer bulunamadı: {tokenizer_path} veya {alt_path}, varsayılan kullanılıyor.")
+            self.tokenizer = CodeTokenizer(vocab_size=16384)
+            # Eğitimsiz tokenizera geçsek bile gerçek vocab size'ı model config'i için 16384'e sabitlemeliyiz ki OOM patlamasın.
+            self.tokenizer.vocab_size = 16384
             
         # Flash Attention / SDPA kontrolü:
         # - "flash_attention_2" → use_flash_attention=True (flash-attn paketi kurulu olmalı)
@@ -285,7 +291,7 @@ class ModelManager:
             self.logger.info(f"Attention backend: {attn_impl} (PyTorch SDPA kullanılacak)")
 
         config = CodeMindConfig(
-            vocab_size=self.tokenizer.vocab_size_actual,
+            vocab_size=max(16384, getattr(self.tokenizer, 'vocab_size_actual', 16384)),
             hidden_size=hidden_size,
             num_hidden_layers=layers,
             num_attention_heads=heads,
