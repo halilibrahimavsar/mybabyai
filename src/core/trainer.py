@@ -635,6 +635,37 @@ class LoRATrainer:
                     torch.save(checkpoint, step_path)
                     
                     self.trainer_wrapper.logger.info(f"💾 Periyodik CodeMind formatı kaydedildi: {step_path}")
+
+                    # Notebook ortamları için indirme linki oluştur (Kaggle/Colab)
+                    try:
+                        from IPython.display import FileLink, display
+                        path_str = str(step_path)
+                        # Kaggle FileLink için /kaggle/working/ kısmını temizle (relative path bekler)
+                        if path_str.startswith("/kaggle/working/"):
+                            path_str = path_str.replace("/kaggle/working/", "")
+                        elif path_str.startswith("./"):
+                            path_str = path_str[2:]
+                            
+                        display(FileLink(path_str))
+                    except Exception:
+                        pass
+
+                    # --- Custom Checkpoint Rotation (Keep only last 3) ---
+                    try:
+                        custom_checkpoints = sorted(
+                            list(checkpoint_dir.glob("model_final_*.pt")),
+                            key=lambda p: int(p.stem.split("_")[-1]) if p.stem.split("_")[-1].isdigit() else 0
+                        )
+                        if len(custom_checkpoints) > 3:
+                            for old_ckpt in custom_checkpoints[:-3]:
+                                try:
+                                    old_ckpt.unlink()
+                                    self.trainer_wrapper.logger.info(f"🗑️ Eski checkpoint temizlendi: {old_ckpt.name}")
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        self.trainer_wrapper.logger.warning(f"Checkpoint rotasyonu hatası: {e}")
+
                 except Exception as e:
                     self.trainer_wrapper.logger.error(f"Periyodik CodeMind yedekleme hatası: {e}")
 
