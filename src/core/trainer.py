@@ -230,7 +230,7 @@ class LoRATrainer:
                 "logging_steps", training_config.get("logging_steps", 10)
             ),
             save_steps=kwargs.get("save_steps", training_config.get("save_steps", 500)),
-            save_total_limit=3,
+            save_total_limit=1, # Kaggle disk alanını korumak için 3'ten 1'e düşürüldü
             fp16=self.model_manager.device == "cuda",
             bf16=False,
             gradient_checkpointing=gradient_checkpointing,
@@ -654,7 +654,15 @@ class LoRATrainer:
                             # Kaggle ve Colab için kök dizini belirle
                             root_dir = "/kaggle/working" if os.path.exists("/kaggle/working") else "/content" if os.path.exists("/content") else os.getcwd()
                             rel_path = os.path.relpath(step_path, root_dir)
-                            display(FileLink(rel_path))
+                            
+                            # FileLink doğrulaması CWD'ye göre yapıldığından geçici olarak root_dir'e geçiş yapıyoruz
+                            old_cwd = os.getcwd()
+                            try:
+                                if os.path.exists(root_dir):
+                                    os.chdir(root_dir)
+                                display(FileLink(rel_path))
+                            finally:
+                                os.chdir(old_cwd)
                         else:
                             self.trainer_wrapper.logger.warning(f"⚠️ Checkpoint dosyası ({step_path.name}) diske yazıldı ama henüz erişilemiyor.")
                     except Exception:
@@ -666,8 +674,8 @@ class LoRATrainer:
                             list(checkpoint_dir.glob("model_final_*.pt")),
                             key=lambda p: int(p.stem.split("_")[-1]) if p.stem.split("_")[-1].isdigit() else 0
                         )
-                        if len(custom_checkpoints) > 3:
-                            for old_ckpt in custom_checkpoints[:-3]:
+                        if len(custom_checkpoints) > 2:
+                            for old_ckpt in custom_checkpoints[:-2]:
                                 try:
                                     old_ckpt.unlink()
                                     self.trainer_wrapper.logger.info(f"🗑️ Eski checkpoint temizlendi: {old_ckpt.name}")
