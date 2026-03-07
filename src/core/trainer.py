@@ -640,10 +640,23 @@ class LoRATrainer:
                     try:
                         from IPython.display import FileLink, display
                         import os
+                        import time
                         
-                        # Notebook'un o anki çalışma dizinine göre göreceli yol hesapla
-                        rel_path = os.path.relpath(step_path, os.getcwd())
-                        display(FileLink(rel_path))
+                        # Dosyanın diske tam yazıldığından emin ol
+                        # torch.save senkrondur ama bazen FS buffer gecikmesi olabilir
+                        max_retries = 5
+                        for i in range(max_retries):
+                            if os.path.exists(step_path):
+                                break
+                            time.sleep(1)
+                        
+                        if os.path.exists(step_path):
+                            # Kaggle ve Colab için kök dizini belirle
+                            root_dir = "/kaggle/working" if os.path.exists("/kaggle/working") else "/content" if os.path.exists("/content") else os.getcwd()
+                            rel_path = os.path.relpath(step_path, root_dir)
+                            display(FileLink(rel_path))
+                        else:
+                            self.trainer_wrapper.logger.warning(f"⚠️ Checkpoint dosyası ({step_path.name}) diske yazıldı ama henüz erişilemiyor.")
                     except Exception:
                         pass
 
