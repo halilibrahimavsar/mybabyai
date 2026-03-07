@@ -639,14 +639,11 @@ class LoRATrainer:
                     # Notebook ortamları için indirme linki oluştur (Kaggle/Colab)
                     try:
                         from IPython.display import FileLink, display
-                        path_str = str(step_path)
-                        # Kaggle FileLink için /kaggle/working/ kısmını temizle (relative path bekler)
-                        if path_str.startswith("/kaggle/working/"):
-                            path_str = path_str.replace("/kaggle/working/", "")
-                        elif path_str.startswith("./"):
-                            path_str = path_str[2:]
-                            
-                        display(FileLink(path_str))
+                        import os
+                        
+                        # Notebook'un o anki çalışma dizinine göre göreceli yol hesapla
+                        rel_path = os.path.relpath(step_path, os.getcwd())
+                        display(FileLink(rel_path))
                     except Exception:
                         pass
 
