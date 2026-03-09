@@ -194,6 +194,24 @@ class DatasetDownloader:
             "description": "OpenOrca veri setinin Türkçe çevirisi (Yüksek kalite)",
             "size": "Büyük (~100MB)",
             "languages": ["Türkçe"],
+        },
+        "instructurca": {
+            "name": "turkish-nlp-suite/InstrucTurca",
+            "description": "2.5M+ örnekli devasa Türkçe talimat seti",
+            "size": "Çok Büyük (~1GB+)",
+            "languages": ["Türkçe"],
+        },
+        "bellaturca": {
+            "name": "turkish-nlp-suite/BellaTurca",
+            "description": "Büyük ölçekli genel Türkçe metin külliyatı",
+            "size": "Çok Büyük",
+            "languages": ["Türkçe"],
+        },
+        "turkish_multi_instruct": {
+            "name": "umarigan/Turkish-LLM-Multi-Instruction",
+            "description": "Çoklu görev ve talimatlar içeren temiz Türkçe veri seti",
+            "size": "Büyük",
+            "languages": ["Türkçe"],
         }
     }
 
