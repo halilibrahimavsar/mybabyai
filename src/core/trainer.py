@@ -525,27 +525,48 @@ class LoRATrainer:
                 from src.data.dataset_downloader import DatasetDownloader
                 downloader = DatasetDownloader()
                 self.logger.info(f"HF Dataset çekiliyor: {name}")
+                
+                streaming = item.get("streaming", False)
                 convs = downloader.download_dataset(
                     item.get("dataset_key", data), 
                     max_samples=item.get("max_samples"),
-                    split=item.get("split", "train")
+                    split=item.get("split", "train"),
+                    streaming=streaming
                 )
                 if convs:
-                    ds = ConversationDataset(
-                        conversations=convs,
-                        tokenizer=self.model_manager.tokenizer,
-                        max_length=max_length,
-                        pack_sequences=pack_sequences,
-                    )
-                    datasets.append(ds)
+                    if streaming:
+                        from src.core.datasets import StreamingConversationDataset
+                        ds = StreamingConversationDataset(
+                            conversations_generator=convs,
+                            tokenizer=self.model_manager.tokenizer,
+                            max_length=max_length,
+                            pack_sequences=pack_sequences,
+                        )
+                        datasets.append(ds)
+                    else:
+                        from src.core.datasets import ConversationDataset
+                        ds = ConversationDataset(
+                            conversations=convs,
+                            tokenizer=self.model_manager.tokenizer,
+                            max_length=max_length,
+                            pack_sequences=pack_sequences,
+                        )
+                        datasets.append(ds)
             else:
                 self.logger.warning(f"Bilinmeyen veri tipi: {data_type}, atlanıyor.")
                 
         if not datasets:
             raise ValueError("Havuzdaki verilerden hiçbir geçerli dataset oluşturulamadı.")
             
-        combined_dataset = ConcatDataset(datasets)
-        self.logger.info(f"Tüm kaynaklar birleştirildi. Toplam örnek sayısı: {len(combined_dataset)}")
+        from torch.utils.data import IterableDataset, ChainDataset, ConcatDataset
+        has_streaming = any(isinstance(d, IterableDataset) for d in datasets)
+
+        if has_streaming:
+            combined_dataset = ChainDataset(datasets)
+            self.logger.info(f"İçerisinde streaming dataset var. ChainDataset olarak birleştirildi. Toplam kaynak: {len(datasets)}")
+        else:
+            combined_dataset = ConcatDataset(datasets)
+            self.logger.info(f"Tüm kaynaklar birleştirildi. Toplam örnek sayısı: {len(combined_dataset)}")
 
         return self._train(combined_dataset, resume_from_checkpoint=resume_from_checkpoint, **training_kwargs)
 

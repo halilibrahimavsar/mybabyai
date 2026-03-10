@@ -226,8 +226,8 @@ class DatasetDownloader:
         return self.READY_DATASETS
 
     def download_dataset(
-        self, dataset_key: str, max_samples: Optional[int] = None, split: str = "train"
-    ) -> List[Dict[str, str]]:
+        self, dataset_key: str, max_samples: Optional[int] = None, split: str = "train", streaming: bool = False
+    ) -> Any: # Returns List or Generator
         if dataset_key not in self.READY_DATASETS:
             raise ValueError(f"Bilinmeyen dataset: {dataset_key}")
 
@@ -264,16 +264,22 @@ class DatasetDownloader:
         for s in splits_to_try:
             try:
                 self.logger.info(f"Split deneniyor: {s}")
+                
+                load_kwargs = {"path": dataset_name, "split": s}
                 if config:
-                    dataset = load_dataset(
-                        dataset_name, config, split=s, token=token
-                    )
-                else:
-                    dataset = load_dataset(
-                        dataset_name, split=s, token=token
-                    )
+                    load_kwargs["name"] = config
+                if token:
+                    load_kwargs["token"] = token
+                if streaming:
+                    load_kwargs["streaming"] = True
+                    
+                dataset = load_dataset(**load_kwargs)
 
-                conversations = self._convert_to_conversations(dataset, max_samples)
+                conversations = self._convert_to_conversations(dataset, max_samples, streaming)
+                if streaming:
+                    self.logger.info(f"Dataset akışı (stream) başlatıldı (Split: {s})")
+                    return conversations
+                
                 if len(conversations) > 0:
                     self.logger.info(f"Dataset indirildi: {len(conversations)} örnek (Split: {s})")
                     return conversations
@@ -307,8 +313,19 @@ class DatasetDownloader:
         raise last_exception
 
     def _convert_to_conversations(
-        self, dataset, max_samples: Optional[int] = None
-    ) -> List[Dict[str, str]]:
+        self, dataset, max_samples: Optional[int] = None, streaming: bool = False
+    ) -> Any:
+        # If streaming, return a generator
+        if streaming:
+            def _conversation_generator():
+                for i, item in enumerate(dataset):
+                    if max_samples and i >= max_samples:
+                        break
+                    conv = self._extract_conversation(item)
+                    if conv:
+                        yield conv
+            return _conversation_generator()
+            
         from tqdm import tqdm
         conversations = []
         
