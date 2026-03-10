@@ -238,13 +238,33 @@ class CodeMindAdapter:
         self.logger.info(f"Loading CodeMind model from: {checkpoint_path}")
 
         from src.core.tokenizer.code_tokenizer import CodeTokenizer
-
+        
+        pretrained_tok = self.config.get("model.pretrained_tokenizer", "")
         tokenizer_path = self._resolve_tokenizer_path(checkpoint_path)
-        if not tokenizer_path.exists():
-            raise FileNotFoundError(f"Tokenizer not found at {tokenizer_path}")
 
-        self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
-        tokenizer_vocab = self.tokenizer.vocab_size_actual
+        if pretrained_tok:
+            from transformers import AutoTokenizer
+            self.logger.info(f"Loading HF tokenizer from config: {pretrained_tok}")
+            self.tokenizer = AutoTokenizer.from_pretrained(pretrained_tok, trust_remote_code=True)
+            special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
+            self.tokenizer.add_tokens(special_tokens, special_tokens=True)
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = "<|pad|>" if "<|pad|>" in self.tokenizer.get_vocab() else self.tokenizer.eos_token
+            tokenizer_vocab = len(self.tokenizer)
+            self.tokenizer.vocab_size_actual = tokenizer_vocab
+        elif tokenizer_path.exists() and (tokenizer_path / "tokenizer_config.json").exists():
+            from transformers import AutoTokenizer
+            self.logger.info(f"Loading HF tokenizer from path: {tokenizer_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path), trust_remote_code=True)
+            tokenizer_vocab = len(self.tokenizer)
+            self.tokenizer.vocab_size_actual = tokenizer_vocab
+        elif tokenizer_path.exists():
+            self.logger.info(f"Loading CodeTokenizer from path: {tokenizer_path}")
+            self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
+            tokenizer_vocab = self.tokenizer.vocab_size_actual
+        else:
+            raise FileNotFoundError(f"Tokenizer not found at {tokenizer_path} and no pretrained_tokenizer set in config.")
+        
         self.logger.info(f"Tokenizer loaded. Vocab size: {tokenizer_vocab}")
 
         checkpoint = torch.load(checkpoint_path, map_location=self.device)

@@ -271,8 +271,29 @@ class ModelManager:
         # Resolve tokenizer exactly as standard load does
         tokenizer_path = self.codemind_adapter._codemind_path / "tokenizer"
         alt_path = self.codemind_adapter._codemind_path / "checkpoints" / "tokenizer"
-                
-        if tokenizer_path.exists():
+        
+        pretrained_tok = self.config.get("model.pretrained_tokenizer", "")
+        
+        if pretrained_tok:
+            self.logger.info(f"Pre-trained Tokenizer yükleniyor: {pretrained_tok}")
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(pretrained_tok, trust_remote_code=True)
+            
+            # Özel tokenleri ekle (Kodlama için LEO'ya özel prefixler vb.)
+            special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
+            num_added = self.tokenizer.add_tokens(special_tokens, special_tokens=True)
+            if num_added > 0:
+                self.logger.info(f"Tokenizer'a {num_added} adet özel token (kod/yapı) eklendi.")
+            
+            if self.tokenizer.pad_token is None:
+                if "<|pad|>" in self.tokenizer.get_vocab():
+                    self.tokenizer.pad_token = "<|pad|>"
+                else:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                    
+            vocab_size = len(self.tokenizer)
+            self.tokenizer.vocab_size_actual = vocab_size
+        elif tokenizer_path.exists():
             self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
         elif alt_path.exists():
             self.tokenizer = CodeTokenizer.load(str(alt_path))
