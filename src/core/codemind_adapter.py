@@ -237,14 +237,23 @@ class CodeMindAdapter:
 
         self.logger.info(f"Loading CodeMind model from: {checkpoint_path}")
 
+        # --- 1. Load checkpoint to extract metadata first ---
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        metadata = extract_checkpoint_metadata(checkpoint)
+
         from src.core.tokenizer.code_tokenizer import CodeTokenizer
         
         pretrained_tok = self.config.get("model.pretrained_tokenizer", "")
+        # Fallback to checkpoint metadata if local config doesn't specify one
+        if not pretrained_tok and metadata is not None and metadata.pretrained_tokenizer_name:
+            pretrained_tok = metadata.pretrained_tokenizer_name
+
         tokenizer_path = self._resolve_tokenizer_path(checkpoint_path)
 
         if pretrained_tok:
             from transformers import AutoTokenizer
-            self.logger.info(f"Loading HF tokenizer from config: {pretrained_tok}")
+            self.logger.info(f"Loading HF tokenizer: {pretrained_tok}")
             self.tokenizer = AutoTokenizer.from_pretrained(pretrained_tok, trust_remote_code=True)
             special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
             self.tokenizer.add_tokens(special_tokens, special_tokens=True)
@@ -263,13 +272,9 @@ class CodeMindAdapter:
             self.tokenizer = CodeTokenizer.load(str(tokenizer_path))
             tokenizer_vocab = self.tokenizer.vocab_size_actual
         else:
-            raise FileNotFoundError(f"Tokenizer not found at {tokenizer_path} and no pretrained_tokenizer set in config.")
+            raise FileNotFoundError(f"Tokenizer not found at {tokenizer_path} and no pretrained_tokenizer set in config or metadata.")
         
         self.logger.info(f"Tokenizer loaded. Vocab size: {tokenizer_vocab}")
-
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        state_dict = checkpoint.get("model_state_dict", checkpoint)
-        metadata = extract_checkpoint_metadata(checkpoint)
         metadata_ok = True
         if metadata is not None:
             metadata_ok = metadata.vocab_size == tokenizer_vocab
@@ -623,8 +628,9 @@ class CodeMindAdapter:
             metadata = build_checkpoint_metadata(
                 model_config=config_data,
                 tokenizer=self.tokenizer,
-                tokenizer_type="pretrained",
-                architecture_version="codemind-v2"
+                tokenizer_type="pretrained" if self.config.get("model.pretrained_tokenizer") else "codemind",
+                architecture_version="codemind-v2",
+                pretrained_tokenizer_name=self.config.get("model.pretrained_tokenizer", "")
             )
             checkpoint = attach_checkpoint_metadata(checkpoint, metadata)
 

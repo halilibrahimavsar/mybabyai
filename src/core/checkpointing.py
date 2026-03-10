@@ -17,12 +17,12 @@ DEPRECATED_KEY_PATTERNS = [
 
 @dataclass
 class CheckpointMetadata:
-    architecture_version: str
     vocab_size: int
     tokenizer_type: str
     special_tokens_hash: str
     created_at_utc: str
     model_config: Dict[str, Any]
+    pretrained_tokenizer_name: str = ""
 
 
 def _token_values(tokens: Any) -> Iterable[str]:
@@ -45,6 +45,7 @@ def build_checkpoint_metadata(
     tokenizer: Optional[Any],
     tokenizer_type: str,
     architecture_version: str = "codemind-v2",
+    pretrained_tokenizer_name: str = "",
 ) -> CheckpointMetadata:
     vocab_size = int(model_config.get("vocab_size", 0))
     tok_vocab = 0
@@ -71,6 +72,7 @@ def build_checkpoint_metadata(
         special_tokens_hash=compute_special_tokens_hash(special_tokens),
         created_at_utc=datetime.now(tz=timezone.utc).isoformat(),
         model_config=dict(model_config),
+        pretrained_tokenizer_name=pretrained_tokenizer_name,
     )
 
 
@@ -94,6 +96,7 @@ def extract_checkpoint_metadata(checkpoint: Dict[str, Any]) -> Optional[Checkpoi
             special_tokens_hash=str(raw.get("special_tokens_hash", "")),
             created_at_utc=str(raw.get("created_at_utc", "")),
             model_config=dict(raw.get("model_config", {})),
+            pretrained_tokenizer_name=str(raw.get("pretrained_tokenizer_name", "")),
         )
     except Exception:
         return None

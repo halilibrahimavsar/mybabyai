@@ -680,8 +680,9 @@ class LoRATrainer:
                     metadata = build_checkpoint_metadata(
                         model_config=config_data,
                         tokenizer=self.trainer_wrapper.model_manager.tokenizer,
-                        tokenizer_type="pretrained",
-                        architecture_version="codemind-v2"
+                        tokenizer_type="pretrained" if self.trainer_wrapper.config.get("model.pretrained_tokenizer") else "codemind",
+                        architecture_version="codemind-v2",
+                        pretrained_tokenizer_name=self.trainer_wrapper.config.get("model.pretrained_tokenizer", "")
                     )
                     checkpoint = attach_checkpoint_metadata(checkpoint, metadata)
                     
