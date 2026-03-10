@@ -582,6 +582,11 @@ class LoRATrainer:
             combined_dataset = ChainDataset(safe_datasets)
             self.logger.info(f"İçerisinde streaming dataset var. ChainDataset olarak birleştirildi. Toplam kaynak: {len(datasets)}")
             
+            # Streaming modu için multiprocessing DataLoader sorun yaratabilir
+            if self.training_args is not None:
+                self.training_args.dataloader_num_workers = 0
+                self.logger.info("Streaming modu aktif, dataloader_num_workers 0 olarak ayarlandı.")
+            
             # Streaming modunda max_steps > 0 olmalıdır (HF Trainer kuralı)
             if training_kwargs.get("max_steps", -1) <= 0:
                 # Eğer kullanıcı belirtmediyse, config'den bak, o da yoksa varsayılan 500 ata

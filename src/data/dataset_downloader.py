@@ -281,6 +281,22 @@ class DatasetDownloader:
                 if streaming:
                     load_kwargs["streaming"] = True
                     
+                import os
+                # HTTP Timeout ve Retry ayarlarını ekle (Hugging Face Datasets / fsspec için)
+                if int(os.environ.get("HF_DATASETS_TIMEOUT", 0)) > 0:
+                    timeout = int(os.environ.get("HF_DATASETS_TIMEOUT"))
+                else:
+                    timeout = 120 # Default to 120s if not set
+                    
+                # Use storage_options configured with backoff/retries
+                # This directly configures the underlying aiohttp requests used by fsspec
+                storage_options = {
+                    "client_kwargs": {
+                        "timeout": __import__("aiohttp").ClientTimeout(total=timeout)
+                    }
+                }
+                load_kwargs["storage_options"] = storage_options
+
                 dataset = load_dataset(**load_kwargs)
 
                 conversations = self._convert_to_conversations(dataset, max_samples, streaming)
