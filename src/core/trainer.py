@@ -229,6 +229,7 @@ class LoRATrainer:
             logging_steps=kwargs.get(
                 "logging_steps", training_config.get("logging_steps", 10)
             ),
+            max_steps=kwargs.get("max_steps", training_config.get("max_steps", -1)),
             save_steps=kwargs.get("save_steps", training_config.get("save_steps", 500)),
             save_total_limit=1, # Kaggle disk alanını korumak için 3'ten 1'e düşürüldü
             fp16=self.model_manager.device == "cuda",
@@ -565,6 +566,16 @@ class LoRATrainer:
         if has_streaming:
             combined_dataset = ChainDataset(datasets)
             self.logger.info(f"İçerisinde streaming dataset var. ChainDataset olarak birleştirildi. Toplam kaynak: {len(datasets)}")
+            
+            # Streaming modunda max_steps > 0 olmalıdır (HF Trainer kuralı)
+            if training_kwargs.get("max_steps", -1) <= 0:
+                # Eğer kullanıcı belirtmediyse, config'den bak, o da yoksa varsayılan 500 ata
+                config_max_steps = self.config.get("training.max_steps", -1)
+                if config_max_steps <= 0:
+                    self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Hata almamak için varsayılan 500 adım ayarlanıyor.")
+                    training_kwargs["max_steps"] = 500
+                else:
+                    training_kwargs["max_steps"] = config_max_steps
         else:
             combined_dataset = ConcatDataset(datasets)
             self.logger.info(f"Tüm kaynaklar birleştirildi. Toplam örnek sayısı: {len(combined_dataset)}")
