@@ -564,7 +564,22 @@ class LoRATrainer:
         has_streaming = any(isinstance(d, IterableDataset) for d in datasets)
 
         if has_streaming:
-            combined_dataset = ChainDataset(datasets)
+            # Sadece IterableDataset alan ChainDataset için Map-style (normal) datasetleri Iterable'e çevir
+            class MapToIterableWrapper(IterableDataset):
+                def __init__(self, ds):
+                    self.ds = ds
+                def __iter__(self):
+                    for item in self.ds:
+                        yield item
+
+            safe_datasets = []
+            for d in datasets:
+                if isinstance(d, IterableDataset):
+                    safe_datasets.append(d)
+                else:
+                    safe_datasets.append(MapToIterableWrapper(d))
+                    
+            combined_dataset = ChainDataset(safe_datasets)
             self.logger.info(f"İçerisinde streaming dataset var. ChainDataset olarak birleştirildi. Toplam kaynak: {len(datasets)}")
             
             # Streaming modunda max_steps > 0 olmalıdır (HF Trainer kuralı)
