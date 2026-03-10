@@ -232,6 +232,7 @@ class DatasetDownloader:
         max_samples: Optional[int] = None, 
         split: str = "train", 
         streaming: bool = False,
+        lazy_load: bool = False,
         config: Optional[str] = None
     ) -> Any: # Returns List or Generator
         if dataset_key not in self.READY_DATASETS:
@@ -298,9 +299,10 @@ class DatasetDownloader:
 
                 dataset = load_dataset(**load_kwargs)
 
-                conversations = self._convert_to_conversations(dataset, max_samples, streaming)
-                if streaming:
-                    self.logger.info(f"Dataset akışı (stream) başlatıldı (Split: {s})")
+                conversations = self._convert_to_conversations(dataset, max_samples, streaming, lazy_load)
+                if streaming or lazy_load:
+                    action_type = "stream üzerinden" if streaming else "diske inen veriden"
+                    self.logger.info(f"Dataset akışı ({action_type}) başlatıldı (Split: {s})")
                     return conversations
                 
                 if len(conversations) > 0:
@@ -336,10 +338,10 @@ class DatasetDownloader:
         raise last_exception
 
     def _convert_to_conversations(
-        self, dataset, max_samples: Optional[int] = None, streaming: bool = False
+        self, dataset, max_samples: Optional[int] = None, streaming: bool = False, lazy_load: bool = False
     ) -> Any:
-        # If streaming, return a generator
-        if streaming:
+        # If streaming or lazy_load, return a generator
+        if streaming or lazy_load:
             def _conversation_generator():
                 for i, item in enumerate(dataset):
                     if max_samples and i >= max_samples:

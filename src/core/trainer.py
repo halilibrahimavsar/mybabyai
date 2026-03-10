@@ -528,15 +528,17 @@ class LoRATrainer:
                 self.logger.info(f"HF Dataset çekiliyor: {name}")
                 
                 streaming = item.get("streaming", False)
+                lazy_load = item.get("lazy_load", False)
                 convs = downloader.download_dataset(
                     item.get("dataset_key", data), 
                     max_samples=item.get("max_samples"),
                     split=item.get("split", "train"),
                     streaming=streaming,
+                    lazy_load=lazy_load,
                     config=item.get("config") or item.get("subset")
                 )
                 if convs:
-                    if streaming:
+                    if streaming or lazy_load:
                         from src.core.datasets import StreamingConversationDataset
                         ds = StreamingConversationDataset(
                             conversations_generator=convs,
