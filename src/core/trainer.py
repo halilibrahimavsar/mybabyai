@@ -754,10 +754,48 @@ class LoRATrainer:
             if resume_from_checkpoint:
                 output_dir = self.training_args.output_dir
                 if os.path.exists(output_dir):
-                    # HF Trainer can find the latest checkpoint automatically if passed True
-                    # or better, it finds the specific directory if it exists.
-                    checkpoint_path = True
-                    self.logger.info(f"Resume from checkpoint aktif: {output_dir}")
+                    # Check for standard HF Trainer directories first
+                    from transformers.trainer_utils import get_last_checkpoint
+                    last_hf_checkpoint = get_last_checkpoint(output_dir)
+                    
+                    if last_hf_checkpoint is not None:
+                        checkpoint_path = last_hf_checkpoint
+                        self.logger.info(f"Resume from HF checkpoint aktif: {checkpoint_path}")
+                    else:
+                        # HF directory missing. Check for custom .pt files.
+                        import glob
+                        pt_files = glob.glob(os.path.join(output_dir, "model_final_*.pt"))
+                        if pt_files:
+                            # Safely extract step numbers from "model_final_8778.pt"
+                            def get_step(name):
+                                try:
+                                    return int(Path(name).stem.split("_")[-1])
+                                except ValueError:
+                                    return -1
+                                    
+                            latest_pt = max(pt_files, key=get_step)
+                            self.logger.info(f"Custom CodeMind checkpoint bulundu: {latest_pt}")
+                            self.logger.info("Ağırlıklar yükleniyor...")
+                            try:
+                                checkpoint_data = torch.load(latest_pt, map_location="cpu")
+                                if "model_state_dict" in checkpoint_data:
+                                    # Load base weights (ignoring LoRA params that might be injected by peft)
+                                    state_dict = checkpoint_data["model_state_dict"]
+                                    if hasattr(self.model_manager.model, "base_model"):
+                                        missing, unexpected = self.model_manager.model.base_model.model.load_state_dict(state_dict, strict=False)
+                                    else:
+                                        missing, unexpected = self.model_manager.model.load_state_dict(state_dict, strict=False)
+                                    self.logger.info(f"Ağırlıklar başarıyla yüklendi. (Missing: {len(missing)}, Unexpected: {len(unexpected)})")
+                                else:
+                                    self.logger.warning("Bilinmeyen checkpoint formatı. 'model_state_dict' bulunamadı.")
+                            except Exception as e:
+                                self.logger.error(f"Checkpoint yüklenirken hata oluştu: {e}")
+                            
+                            # Do NOT pass checkpoint_path to Trainer if we manually loaded a .pt.
+                            # Trainer'ın kendi optimizer/scheduler state'i olmayacak ama ağırlıklarla epoch 1'den devam edecek.
+                            checkpoint_path = None 
+                        else:
+                            self.logger.warning(f"output_dir ({output_dir}) içinde geçerli bir HF veya CodeMind checkpoint bulunamadı. Sıfırdan başlanacak.")
 
             train_result = self.trainer.train(resume_from_checkpoint=checkpoint_path)
             self.is_training = False
