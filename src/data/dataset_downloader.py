@@ -281,7 +281,6 @@ class DatasetDownloader:
                 if streaming:
                     load_kwargs["streaming"] = True
                     
-                import os
                 # HTTP Timeout ve Retry ayarlarını ekle (Hugging Face Datasets / fsspec için)
                 if int(os.environ.get("HF_DATASETS_TIMEOUT", 0)) > 0:
                     timeout = int(os.environ.get("HF_DATASETS_TIMEOUT"))
