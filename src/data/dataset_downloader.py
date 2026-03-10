@@ -203,6 +203,7 @@ class DatasetDownloader:
         },
         "bellaturca": {
             "name": "turkish-nlp-suite/BellaTurca",
+            "config": "OzenliDerlem",
             "description": "Büyük ölçekli genel Türkçe metin külliyatı",
             "size": "Çok Büyük",
             "languages": ["Türkçe"],
@@ -226,14 +227,21 @@ class DatasetDownloader:
         return self.READY_DATASETS
 
     def download_dataset(
-        self, dataset_key: str, max_samples: Optional[int] = None, split: str = "train", streaming: bool = False
+        self, 
+        dataset_key: str, 
+        max_samples: Optional[int] = None, 
+        split: str = "train", 
+        streaming: bool = False,
+        config: Optional[str] = None
     ) -> Any: # Returns List or Generator
         if dataset_key not in self.READY_DATASETS:
             raise ValueError(f"Bilinmeyen dataset: {dataset_key}")
 
         dataset_info = self.READY_DATASETS[dataset_key]
         dataset_name = dataset_info["name"]
-        config = dataset_info.get("config")
+        
+        # Priority: explicit config param > dataset_info config
+        config = config or dataset_info.get("config")
 
         self.logger.info(f"Dataset indiriliyor: {dataset_name}")
 

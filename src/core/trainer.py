@@ -531,7 +531,8 @@ class LoRATrainer:
                     item.get("dataset_key", data), 
                     max_samples=item.get("max_samples"),
                     split=item.get("split", "train"),
-                    streaming=streaming
+                    streaming=streaming,
+                    config=item.get("config") or item.get("subset")
                 )
                 if convs:
                     if streaming:
