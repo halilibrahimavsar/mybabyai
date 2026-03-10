@@ -309,9 +309,12 @@ class DatasetDownloader:
     def _convert_to_conversations(
         self, dataset, max_samples: Optional[int] = None
     ) -> List[Dict[str, str]]:
+        from tqdm import tqdm
         conversations = []
+        
+        total_items = max_samples if max_samples else (len(dataset) if hasattr(dataset, '__len__') else None)
 
-        for i, item in enumerate(dataset):
+        for i, item in enumerate(tqdm(dataset, desc="Veriler dönüştürülüyor", total=total_items, leave=False)):
             if max_samples and i >= max_samples:
                 break
 
