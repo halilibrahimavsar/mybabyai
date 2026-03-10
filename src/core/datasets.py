@@ -212,3 +212,92 @@ class ConversationDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, List[int]]:
         return self.samples[idx]
+
+from typing import Iterator, Iterable
+from torch.utils.data import IterableDataset
+
+class StreamingConversationDataset(IterableDataset):
+    """
+    HuggingFace'in IterableDataset objesinden gelen (streaming=True)
+    veya devasa boyutlu listelerden iteratör ile dönen konuşmaları,
+    RAM'i doldurmadan anlık olarak tokenize edip döndürür.
+    """
+    def __init__(
+        self,
+        conversations_generator: Iterable[Dict[str, str]],
+        tokenizer,
+        max_length: int = 256,
+        pack_sequences: bool = True,
+    ):
+        self.conversations_generator = conversations_generator
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.pack_sequences = pack_sequences
+        
+        # eos ayarlaması
+        self.eos_id = None
+        eos_token = getattr(tokenizer, "eos_token_id", None)
+        if isinstance(eos_token, int):
+            self.eos_id = eos_token
+        elif hasattr(tokenizer, "token_to_id"):
+            try:
+                t_id = tokenizer.token_to_id("<|eos|>")
+                if isinstance(t_id, int):
+                    self.eos_id = t_id
+            except Exception:
+                pass
+
+    def _generate_samples(self) -> Iterator[Dict[str, List[int]]]:
+        token_buffer = deque()
+        
+        for conv in self.conversations_generator:
+            try:
+                # 1. Prompt formatlama
+                formatted_text = build_instruction_prompt(
+                    user=conv.get("user", ""),
+                    assistant=conv.get("assistant", ""),
+                    language="general",
+                    include_eos=False,
+                )
+                
+                # 2. Tokenize (padding/truncation yapmıyoruz, buffer'a atacağız)
+                encoded = self.tokenizer(
+                    formatted_text,
+                    truncation=False,
+                    padding=False,
+                    return_attention_mask=False,
+                )
+                
+                input_ids = encoded.get("input_ids", [])
+                if not input_ids:
+                    continue
+                    
+                # EOS ekle
+                if self.eos_id is not None and input_ids[-1] != self.eos_id:
+                    input_ids.append(self.eos_id)
+                
+                if not self.pack_sequences:
+                    # Sadece max_length kadar kesip gönder (packing yok)
+                    ids = input_ids[:self.max_length]
+                    if len(ids) >= 2:
+                        yield {"input_ids": ids, "attention_mask": [1] * len(ids)}
+                    continue
+
+                # 3. Packing açık ise Buffer'a doldur ve max_length bloklar halinde çıkar
+                token_buffer.extend(input_ids)
+                
+                while len(token_buffer) >= self.max_length:
+                    chunk = [token_buffer.popleft() for _ in range(self.max_length)]
+                    yield {"input_ids": chunk, "attention_mask": [1] * self.max_length}
+                    
+            except Exception:
+                continue
+
+        # Kalan son chunk'ı (ufak olsa da) gönder
+        if self.pack_sequences and len(token_buffer) > 1:
+            remainder = list(token_buffer)
+            # Opsiyonel: remainder = remainder + [pad_token] * (max_length - len)
+            yield {"input_ids": remainder, "attention_mask": [1] * len(remainder)}
+
+    def __iter__(self):
+        return self._generate_samples()
