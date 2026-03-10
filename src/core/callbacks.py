@@ -1,6 +1,7 @@
 import time
 import psutil
 import torch
+import math
 from typing import Callable, Dict, Any
 from transformers import TrainerCallback
 
@@ -41,9 +42,13 @@ class UIProgressCallback(TrainerCallback):
             ram = psutil.virtual_memory()
             ram_percent = ram.percent
             
-            gpu_mem_gb = 0.0
+            gpu_alloc_gb = 0.0
+            gpu_reserved_gb = 0.0
+            gpu_max_alloc_gb = 0.0
             if torch.cuda.is_available():
-                gpu_mem_gb = torch.cuda.memory_allocated() / (1024 ** 3)
+                gpu_alloc_gb = torch.cuda.memory_allocated() / (1024 ** 3)
+                gpu_reserved_gb = torch.cuda.memory_reserved() / (1024 ** 3)
+                gpu_max_alloc_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)
             
             self.progress_fn({
                 "current_step": state.global_step,
@@ -58,7 +63,9 @@ class UIProgressCallback(TrainerCallback):
                 "speed": steps_per_sec,
                 "cpu_percent": cpu_percent,
                 "ram_percent": ram_percent,
-                "gpu_mem_gb": gpu_mem_gb,
+                "gpu_alloc_gb": gpu_alloc_gb,
+                "gpu_reserved_gb": gpu_reserved_gb,
+                "gpu_max_alloc_gb": gpu_max_alloc_gb,
             })
 
 class NotebookProgressCallback(TrainerCallback):
@@ -104,9 +111,21 @@ class NotebookProgressCallback(TrainerCallback):
         # Hardware
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
-        gpu = 0.0
+        gpu_alloc = 0.0
+        gpu_reserved = 0.0
+        gpu_max_alloc = 0.0
         if torch.cuda.is_available():
-            gpu = torch.cuda.memory_allocated() / (1024**3)
+            gpu_alloc = torch.cuda.memory_allocated() / (1024**3)
+            gpu_reserved = torch.cuda.memory_reserved() / (1024**3)
+            gpu_max_alloc = torch.cuda.max_memory_allocated() / (1024**3)
+
+        loss_val = logs.get("loss", None)
+        ppl_display = "N/A"
+        if isinstance(loss_val, (int, float)) and math.isfinite(loss_val):
+            # Avoid inf/overflow for large loss; perplexity beyond exp(20) is not informative in UI.
+            capped = min(float(loss_val), 20.0)
+            ppl = math.exp(capped)
+            ppl_display = f">{ppl:.2f}" if loss_val > 20.0 else f"{ppl:.2f}"
 
         table = Table(title="CodeMind Training Progress", show_header=True, header_style="bold magenta")
         table.add_column("Metric", style="dim")
@@ -116,7 +135,7 @@ class NotebookProgressCallback(TrainerCallback):
         table.add_row("Epoch", f"{state.epoch:.2f}")
         table.add_row("Loss", f"[bold yellow]{logs.get('loss', 0):.4f}[/]")
         table.add_row("Learning Rate", f"{logs.get('learning_rate', 0):.2e}")
-        table.add_row("Perplexity", f"{torch.exp(torch.tensor(logs.get('loss', 100))):.2f}" if "loss" in logs else "N/A")
+        table.add_row("Perplexity", ppl_display)
         table.add_row("---", "---")
         table.add_row("Speed", f"{speed:.2f} steps/s")
         table.add_row("Elapsed", f"{elapsed/60:.1f} min")
@@ -124,7 +143,9 @@ class NotebookProgressCallback(TrainerCallback):
         table.add_row("---", "---")
         table.add_row("CPU", f"{cpu}%")
         table.add_row("RAM", f"{ram}%")
-        table.add_row("GPU Mem", f"{gpu:.1f} GB")
+        table.add_row("GPU Mem (alloc)", f"{gpu_alloc:.1f} GB")
+        table.add_row("GPU Mem (rsvd)", f"{gpu_reserved:.1f} GB")
+        table.add_row("GPU Mem (max)", f"{gpu_max_alloc:.1f} GB")
 
         return table
 

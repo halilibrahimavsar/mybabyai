@@ -661,6 +661,7 @@ class LoRATrainer:
                     import torch
                     from pathlib import Path
                     from src.core.checkpointing import build_checkpoint_metadata, attach_checkpoint_metadata
+                    import json
                     
                     checkpoint_dir = Path(args.output_dir)
                     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -691,6 +692,23 @@ class LoRATrainer:
                     torch.save(checkpoint, step_path)
                     
                     self.trainer_wrapper.logger.info(f"💾 Periyodik CodeMind formatı kaydedildi: {step_path}")
+
+                    # Save tokenizer + config sidecar for easy download/use.
+                    try:
+                        tok = self.trainer_wrapper.model_manager.tokenizer
+                        if tok is not None and hasattr(tok, "save_pretrained"):
+                            tok_dir = checkpoint_dir / "tokenizer"
+                            tok_dir.mkdir(parents=True, exist_ok=True)
+                            tok.save_pretrained(str(tok_dir))
+
+                        sidecar = {
+                            "model_config": config_data,
+                            "checkpoint_metadata": checkpoint.get("checkpoint_metadata", {}),
+                        }
+                        with open(checkpoint_dir / "codemind_checkpoint_info.json", "w", encoding="utf-8") as f:
+                            json.dump(sidecar, f, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
 
                     # Notebook ortamları için indirme linki oluştur (Kaggle/Colab)
                     try:
@@ -819,6 +837,7 @@ class LoRATrainer:
             try:
                 import time
                 from src.core.checkpointing import build_checkpoint_metadata, attach_checkpoint_metadata
+                import json
                 
                 checkpoint_dir = self.config.get_path("codemind.checkpoint_dir", "codemind/checkpoints")
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -840,7 +859,7 @@ class LoRATrainer:
                 metadata = build_checkpoint_metadata(
                     model_config=config_data,
                     tokenizer=self.model_manager.tokenizer,
-                    tokenizer_type="pretrained",
+                    tokenizer_type="pretrained" if self.config.get("model.pretrained_tokenizer") else "codemind",
                     architecture_version="codemind-v2"
                 )
                 checkpoint = attach_checkpoint_metadata(checkpoint, metadata)
@@ -852,6 +871,23 @@ class LoRATrainer:
                 torch.save(checkpoint, versioned_path)
                 torch.save(checkpoint, final_path)
                 self.logger.info(f"CodeMind format checkpoint saved to {final_path}")
+
+                # Save tokenizer + config sidecar for easy download/use.
+                try:
+                    tok = self.model_manager.tokenizer
+                    if tok is not None and hasattr(tok, "save_pretrained"):
+                        tok_dir = checkpoint_dir / "tokenizer"
+                        tok_dir.mkdir(parents=True, exist_ok=True)
+                        tok.save_pretrained(str(tok_dir))
+
+                    sidecar = {
+                        "model_config": config_data,
+                        "checkpoint_metadata": checkpoint.get("checkpoint_metadata", {}),
+                    }
+                    with open(checkpoint_dir / "codemind_checkpoint_info.json", "w", encoding="utf-8") as f:
+                        json.dump(sidecar, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
             except Exception as metadata_e:
                 self.logger.error(f"CodeMind checkpoint ve metadata kaydedilemedi: {metadata_e}")
             

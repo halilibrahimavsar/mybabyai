@@ -22,6 +22,7 @@ class CheckpointMetadata:
     special_tokens_hash: str
     created_at_utc: str
     model_config: Dict[str, Any]
+    architecture_version: str = ""
     pretrained_tokenizer_name: str = ""
 
 
