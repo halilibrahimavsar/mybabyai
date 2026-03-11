@@ -250,7 +250,10 @@ class StreamingConversationDataset(IterableDataset):
     def _generate_samples(self) -> Iterator[Dict[str, List[int]]]:
         token_buffer = deque()
         
-        for conv in self.conversations_generator:
+        # If conversations_generator is a factory function, call it to get a fresh generator
+        conv_list = self.conversations_generator() if callable(self.conversations_generator) else self.conversations_generator
+        
+        for conv in conv_list:
             try:
                 # 1. Prompt formatlama
                 formatted_text = build_instruction_prompt(

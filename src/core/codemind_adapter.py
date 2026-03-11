@@ -14,7 +14,7 @@ from src.core.checkpointing import (
     attach_checkpoint_metadata,
     DEPRECATED_KEY_PATTERNS,
 )
-from src.core.prompting import build_codemind_code_prompt, extract_assistant_response
+from src.core.prompting import build_codemind_code_prompt, build_instruction_prompt, extract_assistant_response
 
 
 @dataclass
@@ -546,7 +546,7 @@ class CodeMindAdapter:
         if self.model is None or self.tokenizer is None:
             raise ValueError("Model not loaded")
 
-        full_prompt = build_codemind_code_prompt(prompt=prompt, language=language)
+        full_prompt = build_instruction_prompt(user=prompt, language=language, include_eos=False)
         tokens = self.tokenizer.encode(full_prompt, add_special_tokens=False)
         input_ids = torch.tensor([tokens], device=self.device)
 
@@ -576,7 +576,7 @@ class CodeMindAdapter:
         if self.model is None or self.tokenizer is None:
             raise ValueError("Model not loaded")
 
-        full_prompt = build_codemind_code_prompt(prompt=prompt, language=language)
+        full_prompt = build_instruction_prompt(user=prompt, language=language, include_eos=False)
         tokens = self.tokenizer.encode(full_prompt, add_special_tokens=False)
         input_ids = torch.tensor([tokens], device=self.device)
 

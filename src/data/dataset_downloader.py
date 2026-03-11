@@ -349,7 +349,7 @@ class DatasetDownloader:
                     conv = self._extract_conversation(item)
                     if conv:
                         yield conv
-            return _conversation_generator()
+            return _conversation_generator
             
         from tqdm import tqdm
         conversations = []
