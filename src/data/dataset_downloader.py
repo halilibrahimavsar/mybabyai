@@ -373,14 +373,24 @@ class DatasetDownloader:
         
         # 1. Alpaca Style (instruction, input, output) / Turkish Support
         # Turkish mapping: talimat -> instruction, giriş -> input, çıktı -> output
-        inst_key = k.get("instruction") or k.get("talimat") or k.get("task") or k.get("özet")
-        out_key = k.get("output") or k.get("response") or k.get("answer") or k.get("çıktı") or k.get("çözüm")
+        inst_key = k.get("instruction") or k.get("talimat") or k.get("task") or k.get("özet") or k.get("soru") or k.get("input") or k.get("giriş")
+        out_key = k.get("output") or k.get("response") or k.get("answer") or k.get("çıktı") or k.get("çözüm") or k.get("cevap")
         
-        if inst_key and out_key:
+        if inst_key and out_key and inst_key != out_key:
             inst = item.get(inst_key, "")
-            inp_key = k.get("input") or k.get("giriş") or k.get("context") or k.get("bağlam")
+            # If we used 'input' as inst_key, don't use it again as inp_key
+            inp_candidates = ["input", "giriş", "context", "bağlam"]
+            inp_key = None
+            for cand in inp_candidates:
+                if cand in k and k[cand] != inst_key and k[cand] != out_key:
+                    inp_key = k[cand]
+                    break
+            
             inp = item.get(inp_key, "") if inp_key else ""
             out = item.get(out_key, "")
+            
+            # Special case for InstrucTurca (Input/Output)
+            # If Input is our inst_key, and Output is out_key, it works.
             
             user_msg = f"{inst}\n{inp}".strip() if inp else inst
             if user_msg and out:

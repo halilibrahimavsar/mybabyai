@@ -582,31 +582,34 @@ class LoRATrainer:
                     safe_datasets.append(MapToIterableWrapper(d))
                     
             combined_dataset = ChainDataset(safe_datasets)
-            self.logger.info(f"İçerisinde streaming dataset var. ChainDataset olarak birleştirildi. Toplam kaynak: {len(datasets)}")
-            
-            # Streaming modu için multiprocessing DataLoader sorun yaratabilir
-            if self.training_args is not None:
-                self.training_args.dataloader_num_workers = 0
-                self.logger.info("Streaming modu aktif, dataloader_num_workers 0 olarak ayarlandı.")
-            
-            # Streaming modunda max_steps > 0 olmalıdır (HF Trainer kuralı)
-            if training_kwargs.get("max_steps", -1) <= 0:
-                # Eğer kullanıcı belirtmediyse, config'den bak, o da yoksa varsayılan 500 ata
-                config_max_steps = self.config.get("training.max_steps", -1)
-                if config_max_steps <= 0:
-                    self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Hata almamak için varsayılan 500 adım ayarlanıyor.")
-                    training_kwargs["max_steps"] = 500
-                else:
-                    training_kwargs["max_steps"] = config_max_steps
-        else:
-            combined_dataset = ConcatDataset(datasets)
-            self.logger.info(f"Tüm kaynaklar birleştirildi. Toplam örnek sayısı: {len(combined_dataset)}")
+        return self._train(
+            combined_dataset, 
+            resume_from_checkpoint=resume_from_checkpoint, 
+            has_streaming=has_streaming,
+            **training_kwargs
+        )
 
-        return self._train(combined_dataset, resume_from_checkpoint=resume_from_checkpoint, **training_kwargs)
-
-    def _train(self, dataset: Dataset, resume_from_checkpoint: bool = False, **kwargs) -> Dict[str, Any]:
+    def _train(self, dataset: Dataset, resume_from_checkpoint: bool = False, has_streaming: bool = False, **kwargs) -> Dict[str, Any]:
         use_notebook_callback = kwargs.pop("use_notebook_callback", False)
+        
+        # Determine max_steps for streaming if not provided
+        if has_streaming and kwargs.get("max_steps", -1) <= 0:
+            config_max_steps = self.config.get("training.max_steps", -1)
+            if config_max_steps <= 0:
+                self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Hata almamak için varsayılan 500 adım ayarlanıyor.")
+                kwargs["max_steps"] = 500
+            else:
+                kwargs["max_steps"] = config_max_steps
+
         self.create_training_args(**kwargs)
+        
+        # Streaming modu için multiprocessing DataLoader sorun yaratabilir
+        if has_streaming:
+            self.training_args.dataloader_num_workers = 0
+            self.logger.info("Streaming modu aktif, dataloader_num_workers 0 olarak ayarlandı.")
+            if self.training_args.max_steps <= 0:
+                 # Backup plan: ensure it's set in training_args too
+                 self.training_args.max_steps = kwargs.get("max_steps", 500)
 
         # ── Aggressive memory optimization ──
         import gc
