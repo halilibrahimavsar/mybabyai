@@ -118,6 +118,9 @@ class CodeMindAdapter:
         from src.core.model.codemind import CodeMindConfig, CodeMindForCausalLM
 
         checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+        if not checkpoint_config and isinstance(checkpoint, dict) and "checkpoint_metadata" in checkpoint:
+            checkpoint_config = checkpoint["checkpoint_metadata"].get("model_config", {})
+            
         hidden_size = int(checkpoint_config.get("hidden_size", 768))
         num_hidden_layers = int(checkpoint_config.get("num_hidden_layers", 12))
         num_attention_heads = int(checkpoint_config.get("num_attention_heads", 12))
