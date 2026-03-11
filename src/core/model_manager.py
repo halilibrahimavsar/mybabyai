@@ -246,19 +246,28 @@ class ModelManager:
         self.logger.info(f"Sıfırdan (eğitilmemiş) CodeMind-{size} model oluşturuluyor...")
         
         # Architecture presets
+        # num_kv_heads: GQA ile KV head sayısını düşürerek VRAM tasarrufu.
+        # Kural: num_attention_heads / num_kv_heads tam sayı olmalı.
         experts = 1
         experts_per_tok = 1
+        num_kv_heads = None  # None → GQA yok (MHA)
         
         if size == "400M":
-            hidden_size, layers, heads = 1152, 24, 16
+            # ~400M param: 1024 × 32 layers × 16 heads
+            # GQA (4 KV heads) → T4 16GB'da rahat çalışır
+            # intermediate_size: SwiGLU için ≈ 2.75× hidden (değil 4×)
+            hidden_size, layers, heads = 1024, 32, 16
+            num_kv_heads = 4  # GQA: 16 Q / 4 KV → %50 KV VRAM tasarrufu
         elif size == "350M":
             hidden_size, layers, heads = 1024, 24, 16
+            num_kv_heads = 4
         elif size == "350M-MOE":
             hidden_size, layers, heads = 448, 6, 8
             experts = 4
             experts_per_tok = 2
         elif size == "650M":
             hidden_size, layers, heads = 1280, 24, 20
+            num_kv_heads = 4
         else: # Default 125M
             hidden_size, layers, heads = 768, 12, 12
             
@@ -313,12 +322,25 @@ class ModelManager:
         else:
             self.logger.info(f"Attention backend: {attn_impl} (PyTorch SDPA kullanılacak)")
 
+        # Vocab size: AutoTokenizer.len() her zaman gerçek vocab büyüklüğünü döndürür.
+        # Not: vocab_size_actual sadece custom CodeTokenizer'da set edilir.
+        # ytu-ce-cosmos/Turkish-GPT2-large → ~52009 token; 16384'e kırpmak ciddi kalite kaybına yol açar.
+        actual_vocab_size = len(self.tokenizer) if hasattr(self.tokenizer, '__len__') else getattr(self.tokenizer, 'vocab_size_actual', 50257)
+        self.logger.info(f"Tokenizer vocab size: {actual_vocab_size}")
+        
+        # intermediate_size: SwiGLU MLP için ~2.75x hidden_size önerilir (GPT-4 / LLaMA3 standardı).
+        # 4x yerine 2.75x kullanmak yaklaşık aynı parametre sayısında daha iyi FLOPs verimliliği sağlar.
+        ffn_size = int(hidden_size * 2.75)
+        # 64'ün katı olmasını sağla (CUDA tensorcore hizalaması)
+        ffn_size = (ffn_size // 64) * 64
+        
         config = CodeMindConfig(
-            vocab_size=max(16384, getattr(self.tokenizer, 'vocab_size_actual', 16384)),
+            vocab_size=actual_vocab_size,
             hidden_size=hidden_size,
             num_hidden_layers=layers,
             num_attention_heads=heads,
-            intermediate_size=hidden_size * 4,
+            num_key_value_heads=num_kv_heads if num_kv_heads is not None else heads,
+            intermediate_size=ffn_size,
             max_position_embeddings=4096,
             num_experts=experts,
             num_experts_per_tok=experts_per_tok,
