@@ -258,7 +258,7 @@ class CodeMindAdapter:
             from transformers import AutoTokenizer
             self.logger.info(f"Loading HF tokenizer: {pretrained_tok}")
             self.tokenizer = AutoTokenizer.from_pretrained(pretrained_tok, trust_remote_code=True)
-            special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
+            special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|tr|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
             self.tokenizer.add_tokens(special_tokens, special_tokens=True)
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = "<|pad|>" if "<|pad|>" in self.tokenizer.get_vocab() else self.tokenizer.eos_token

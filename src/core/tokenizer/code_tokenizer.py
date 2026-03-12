@@ -307,6 +307,7 @@ CODE_PATTERNS = {
 }
 
 SPECIAL_TOKENS = [
+    "<|tr|>",
     "<|python|>",
     "<|dart|>",
     "<|javascript|>",

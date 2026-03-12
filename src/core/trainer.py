@@ -317,6 +317,7 @@ class LoRATrainer:
             max_length=max_length,
             formatting_func=formatting_func,
             pack_sequences=pack_sequences,
+            language=self.config.get("app.language", "tr"),
         )
         self.logger.info(
             "Text dataset hazırlandı: samples=%s, max_length=%s, pack_sequences=%s",
@@ -362,6 +363,7 @@ class LoRATrainer:
             tokenizer=self.model_manager.tokenizer,
             max_length=max_length,
             pack_sequences=pack_sequences,
+            language=self.config.get("app.language", "tr"),
         )
         self.logger.info(
             "Conversation dataset hazırlandı: original=%s, packed=%s, max_length=%s, pack_sequences=%s",
