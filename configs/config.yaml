@@ -44,9 +44,9 @@ model:
   model_path: models/
   name: CodeMind-125M
 training:
-  per_device_train_batch_size: 16
-  gradient_accumulation_steps: 8
-  learning_rate: 0.00015
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 0.0001
   max_length: 1024
   gradient_checkpointing: true
   num_train_epochs: 3

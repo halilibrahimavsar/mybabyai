@@ -114,11 +114,13 @@ class ConversationDataset(Dataset):
         tokenizer,
         max_length: int = 256,
         pack_sequences: bool = True,
+        language: str = "tr",
     ):
         self.conversations = conversations
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.pack_sequences = pack_sequences
+        self.language = language
         self.samples: List[Dict[str, List[int]]] = self._build_samples()
 
     def _get_eos_token_id(self) -> Optional[int]:
@@ -155,7 +157,7 @@ class ConversationDataset(Dataset):
             build_instruction_prompt(
                 user=conv["user"],
                 assistant=conv["assistant"],
-                language="general",
+                language=self.language,
                 include_eos=False,
             ) for conv in self.conversations
         ]
@@ -228,11 +230,13 @@ class StreamingConversationDataset(IterableDataset):
         tokenizer,
         max_length: int = 256,
         pack_sequences: bool = True,
+        language: str = "tr",
     ):
         self.conversations_generator = conversations_generator
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.pack_sequences = pack_sequences
+        self.language = language
         
         # eos ayarlaması
         self.eos_id = None
@@ -259,7 +263,7 @@ class StreamingConversationDataset(IterableDataset):
                 formatted_text = build_instruction_prompt(
                     user=conv.get("user", ""),
                     assistant=conv.get("assistant", ""),
-                    language="general",
+                    language=self.language,
                     include_eos=False,
                 )
                 
@@ -291,7 +295,7 @@ class StreamingConversationDataset(IterableDataset):
                 
                 while len(token_buffer) >= self.max_length:
                     chunk = [token_buffer.popleft() for _ in range(self.max_length)]
-                    yield {"input_ids": chunk, "attention_mask": [1] * self.max_length}
+                    yield {"input_ids": chunk, "attention_mask": [1] * len(chunk)}
                     
             except Exception:
                 continue

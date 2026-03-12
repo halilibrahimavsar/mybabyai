@@ -467,6 +467,7 @@ class LoRATrainer:
                             tokenizer=self.model_manager.tokenizer,
                             max_length=max_length,
                             pack_sequences=pack_sequences,
+                            language=self.config.get("app.language", "tr"),
                         )
                         datasets.append(ds)
                         self.logger.info(f"{name}: {len(convs)} konuşma yüklendi.")
@@ -520,6 +521,7 @@ class LoRATrainer:
                     tokenizer=self.model_manager.tokenizer,
                     max_length=max_length,
                     pack_sequences=pack_sequences,
+                    language=self.config.get("app.language", "tr"),
                 )
                 datasets.append(ds)
             elif data_type == "huggingface":
@@ -545,6 +547,7 @@ class LoRATrainer:
                             tokenizer=self.model_manager.tokenizer,
                             max_length=max_length,
                             pack_sequences=pack_sequences,
+                            language=self.config.get("app.language", "tr"),
                         )
                         datasets.append(ds)
                     else:
@@ -554,6 +557,7 @@ class LoRATrainer:
                             tokenizer=self.model_manager.tokenizer,
                             max_length=max_length,
                             pack_sequences=pack_sequences,
+                            language=self.config.get("app.language", "tr"),
                         )
                         datasets.append(ds)
             else:
