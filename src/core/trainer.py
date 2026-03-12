@@ -198,6 +198,9 @@ class LoRATrainer:
             training_config.get("torch_compile", False),
         )
 
+        # Determine if BF16 is supported (SM80+ / Ampere and newer)
+        bf16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+        
         self.training_args = TrainingArguments(
             output_dir=output_dir,
             num_train_epochs=kwargs.get(
@@ -232,8 +235,8 @@ class LoRATrainer:
             max_steps=kwargs.get("max_steps", training_config.get("max_steps", -1)),
             save_steps=kwargs.get("save_steps", training_config.get("save_steps", 500)),
             save_total_limit=1, # Kaggle disk alanını korumak için 3'ten 1'e düşürüldü
-            fp16=self.model_manager.device == "cuda",
-            bf16=False,
+            fp16=self.model_manager.device == "cuda" and not bf16_supported,
+            bf16=bf16_supported,
             gradient_checkpointing=gradient_checkpointing,
             optim=kwargs.get("optim", training_config.get("optim", default_optim)),
             report_to="none",
@@ -502,6 +505,7 @@ class LoRATrainer:
                     tokenizer=self.model_manager.tokenizer,
                     max_length=max_length,
                     pack_sequences=pack_sequences,
+                    language=self.config.get("app.language", "tr"),
                 )
                 datasets.append(ds)
                 self.logger.info(f"{name}: {len(texts)} metin parçası çekildi.")
@@ -512,6 +516,7 @@ class LoRATrainer:
                     tokenizer=self.model_manager.tokenizer,
                     max_length=max_length,
                     pack_sequences=pack_sequences,
+                    language=self.config.get("app.language", "tr"),
                 )
                 datasets.append(ds)
                 

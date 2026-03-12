@@ -235,6 +235,7 @@ JAVASCRIPT_TOKENS = [
 ]
 
 CODE_SPECIAL_TOKENS = [
+    "<|tr|>",
     "<|python|>",
     "<|dart|>",
     "<|javascript|>",
@@ -379,6 +380,38 @@ class AdvancedCodeTokenizer:
             "user": self._vocab.get("<|user|>", 0),
             "system": self._vocab.get("<|system|>", 0),
         }
+
+    def __call__(
+        self,
+        text: Union[str, List[str]],
+        truncation: bool = False,
+        max_length: Optional[int] = None,
+        padding: bool = False,
+        return_tensors: Optional[str] = None,
+        add_special_tokens: bool = True,
+        return_attention_mask: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Compatibility method for Transformers-like usage."""
+        if isinstance(text, list):
+            input_ids = [self.encode(t, add_special_tokens=add_special_tokens) for t in text]
+            # Simple truncation for list of texts
+            if truncation and max_length:
+                input_ids = [ids[:max_length] for ids in input_ids]
+        else:
+            input_ids = self.encode(text, add_special_tokens=add_special_tokens)
+            if truncation and max_length:
+                input_ids = input_ids[:max_length]
+
+        result = {"input_ids": input_ids}
+        if return_attention_mask:
+            if isinstance(text, list):
+                result["attention_mask"] = [[1] * len(ids) for ids in input_ids]
+            else:
+                result["attention_mask"] = [1] * len(input_ids)
+        
+        # return_tensors logic could be added here if needed, but for our datasets it's not required
+        return result
 
     def encode(
         self,

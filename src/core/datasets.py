@@ -11,16 +11,20 @@ class TextDataset(Dataset):
         max_length: int = 256,
         formatting_func: Optional[Callable] = None,
         pack_sequences: bool = True,
+        language: str = "tr",
     ):
         self.texts = texts
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.formatting_func = formatting_func or self._default_format
+        self.formatting_func = formatting_func  # Store original formatting_func
         self.pack_sequences = pack_sequences
+        self.language = language
         self.samples: List[Dict[str, List[int]]] = self._build_samples()
 
-    def _default_format(self, text: str) -> str:
-        return build_instruction_prompt(user=text, assistant=None, include_eos=False)
+    def _get_formatted_text(self, text: str) -> str:
+        if self.formatting_func:
+            return self.formatting_func(text)
+        return build_instruction_prompt(user=text, assistant=None, language=self.language, include_eos=False)
 
     def _get_eos_token_id(self) -> Optional[int]:
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
@@ -52,7 +56,7 @@ class TextDataset(Dataset):
         eos_id = self._get_eos_token_id()
         samples: List[Dict[str, List[int]]] = []
 
-        formatted_texts = [self.formatting_func(t) for t in self.texts]
+        formatted_texts = [self._get_formatted_text(t) for t in self.texts]
         chunk_size = 5000
 
         if not self.pack_sequences:

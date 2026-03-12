@@ -154,6 +154,7 @@ class InferenceEngine:
         user_input: str,
         context: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
+        language: Optional[str] = None,
     ) -> str:
         return build_chat_prompt(
             user_input=user_input,
@@ -162,6 +163,7 @@ class InferenceEngine:
             history=history,
             history_turns=5,
             append_assistant_token=True,
+            language=language or self.config.get("app.language", "tr"),
         )
 
     def generate(

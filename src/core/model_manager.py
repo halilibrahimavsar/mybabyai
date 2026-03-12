@@ -289,7 +289,7 @@ class ModelManager:
             self.tokenizer = AutoTokenizer.from_pretrained(pretrained_tok, trust_remote_code=True)
             
             # Özel tokenleri ekle (Kodlama için LEO'ya özel prefixler vb.)
-            special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
+            special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|tr|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
             num_added = self.tokenizer.add_tokens(special_tokens, special_tokens=True)
             if num_added > 0:
                 self.logger.info(f"Tokenizer'a {num_added} adet özel token (kod/yapı) eklendi.")

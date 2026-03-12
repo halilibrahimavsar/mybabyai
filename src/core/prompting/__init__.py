@@ -74,8 +74,15 @@ def build_chat_prompt(
     history: Optional[List[Dict[str, str]]] = None,
     history_turns: int = 5,
     append_assistant_token: bool = True,
+    language: str = "general",
 ) -> str:
-    parts = [f"{TOKENS.system}\n{system_prompt.strip()}"]
+    parts: List[str] = []
+    
+    language = (language or "general").strip().lower()
+    if language and language != "general":
+        parts.append(f"<|{language}|>")
+
+    parts.append(f"{TOKENS.system}\n{system_prompt.strip()}")
 
     if context:
         parts.append(f"\n\n{TOKENS.context}\n{context.strip()}\n{TOKENS.context_end}")
