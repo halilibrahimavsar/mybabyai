@@ -240,10 +240,50 @@ class CodeMindAdapter:
 
         self.logger.info(f"Loading CodeMind model from: {checkpoint_path}")
 
-        # --- 1. Load checkpoint to extract metadata first ---
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        state_dict = checkpoint.get("model_state_dict", checkpoint)
-        metadata = extract_checkpoint_metadata(checkpoint)
+        # --- Detect if this is a directory-style checkpoint (e.g. HF Trainer output) ---
+        _is_dir_checkpoint = checkpoint_path.is_dir()
+
+        if _is_dir_checkpoint:
+            # Try safetensors first, then pytorch_model.bin
+            safetensors_file = checkpoint_path / "model.safetensors"
+            pytorch_bin_file = checkpoint_path / "pytorch_model.bin"
+            config_file = checkpoint_path / "config.json"
+
+            if safetensors_file.exists():
+                try:
+                    from safetensors.torch import load_file as safetensors_load
+                    state_dict = safetensors_load(str(safetensors_file), device=self.device)
+                except ImportError:
+                    self.logger.warning("safetensors package not available, falling back to torch.load")
+                    state_dict = torch.load(str(safetensors_file), map_location=self.device)
+            elif pytorch_bin_file.exists():
+                state_dict = torch.load(str(pytorch_bin_file), map_location=self.device)
+            else:
+                raise FileNotFoundError(
+                    f"No model weights found in directory checkpoint: {checkpoint_path}. "
+                    "Expected 'model.safetensors' or 'pytorch_model.bin'."
+                )
+
+            # Load config.json to build architecture
+            _dir_config: Dict[str, Any] = {}
+            if config_file.exists():
+                import json
+                with open(config_file, "r", encoding="utf-8") as _f:
+                    _dir_config = json.load(_f)
+
+            # Wrap into expected format
+            checkpoint: Dict[str, Any] = {
+                "model_state_dict": state_dict,
+                "config": _dir_config,
+            }
+            metadata = None  # No custom metadata in HF-style dirs; skip metadata validation
+
+        else:
+            # --- 1. Load checkpoint to extract metadata first ---
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            metadata = extract_checkpoint_metadata(checkpoint)
+
 
         from src.core.tokenizer.code_tokenizer import CodeTokenizer
         
@@ -252,7 +292,11 @@ class CodeMindAdapter:
         if not pretrained_tok and metadata is not None and metadata.pretrained_tokenizer_name:
             pretrained_tok = metadata.pretrained_tokenizer_name
 
-        tokenizer_path = self._resolve_tokenizer_path(checkpoint_path)
+        # For directory checkpoints (safetensors), the tokenizer may be in the dir itself.
+        if _is_dir_checkpoint and (checkpoint_path / "tokenizer_config.json").exists():
+            tokenizer_path = checkpoint_path
+        else:
+            tokenizer_path = self._resolve_tokenizer_path(checkpoint_path)
 
         if pretrained_tok:
             from transformers import AutoTokenizer

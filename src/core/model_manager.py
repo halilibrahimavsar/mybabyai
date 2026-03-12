@@ -200,11 +200,36 @@ class ModelManager:
         self.model_name = self.resolve_model_name(model_name)
 
         # Handle CodeMind specifically
-        if "codemind" in self.model_name.lower() or self.model_name.endswith(".pt"):
-            checkpoint_path = self.model_name if self.model_name.endswith(".pt") else None
+        is_codemind_path = "codemind" in self.model_name.lower() or self.model_name.endswith(".pt")
+        
+        # Check if it's a directory with codemind config
+        if not is_codemind_path and os.path.isdir(self.model_name):
+            config_path = os.path.join(self.model_name, "config.json")
+            if os.path.exists(config_path):
+                try:
+                    import json
+                    with open(config_path, 'r') as f:
+                        cfg_temp = json.load(f)
+                        if cfg_temp.get("model_type") == "codemind" or "codemind" in cfg_temp.get("architectures", [None])[0].lower():
+                            is_codemind_path = True
+                except Exception:
+                    pass
+
+        if is_codemind_path:
+            # Pass the explicit path if it's a .pt file OR a directory.
+            # Only fall back to None (auto-discovery) when the model_name is an
+            # abstract alias like "CodeMind-125M" with no existing file/dir.
+            explicit_path = self.model_name
+            if os.path.exists(explicit_path):
+                checkpoint_path: Optional[str] = explicit_path
+            elif explicit_path.endswith(".pt"):
+                checkpoint_path = explicit_path  # Will raise FileNotFoundError inside
+            else:
+                checkpoint_path = None  # Auto-discover from checkpoint_dirs
             return self._load_codemind(
                 checkpoint_path, allow_fresh_fallback=allow_fresh_fallback
             )
+
         
         # Generic HuggingFace Model Loading
         self.logger.info(f"HuggingFace model yükleniyor: {self.model_name}...")
@@ -438,29 +463,68 @@ class ModelManager:
                     "modified": pt_file.stat().st_mtime,
                 })
 
+            # Format C: subdirectories inside codemind/checkpoints/ (e.g. checkpoint1200/)
+            # These are produced when HF Trainer saves into the codemind checkpoint dir.
+            for sub_dir in sorted(pt_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                if not sub_dir.is_dir():
+                    continue
+                # Accept if it has a model file (full or safetensors) or config
+                has_model = (
+                    (sub_dir / "config.json").exists()
+                    or (sub_dir / "model.safetensors").exists()
+                    or (sub_dir / "pytorch_model.bin").exists()
+                    or (sub_dir / "adapter_config.json").exists()
+                )
+                if not has_model:
+                    continue
+                lora_cfg = sub_dir / "adapter_config.json"
+                ref_file = lora_cfg if lora_cfg.exists() else (sub_dir / "config.json")
+                fmt = "hf_lora" if lora_cfg.exists() else "hf_full"
+                checkpoints.append({
+                    "path": str(sub_dir),
+                    "name": f"{sub_dir.name} ({'LoRA' if fmt == 'hf_lora' else 'Full'})",
+                    "format": fmt,
+                    "size_mb": round(
+                        sum(f.stat().st_size for f in sub_dir.rglob("*") if f.is_file()) / (1024 * 1024), 1
+                    ),
+                    "modified": ref_file.stat().st_mtime if ref_file.exists() else sub_dir.stat().st_mtime,
+                })
+
+
+
         # Format B: HuggingFace Trainer directories
         hf_dir = Path(self.config.get("training.output_dir", "models/fine_tuned"))
         if hf_dir.exists():
-            # Main adapter dir itself (latest)
+            # Main adapter/model dir itself (latest)
             adapter_cfg = hf_dir / "adapter_config.json"
-            if adapter_cfg.exists():
+            model_cfg = hf_dir / "config.json"
+            
+            if adapter_cfg.exists() or model_cfg.exists():
+                fmt = "hf_lora" if adapter_cfg.exists() else "hf_full"
+                ref_file = adapter_cfg if adapter_cfg.exists() else model_cfg
+                
                 checkpoints.append({
                     "path": str(hf_dir),
-                    "name": f"{hf_dir.name} (LoRA aktif)",
-                    "format": "hf_lora",
+                    "name": f"{hf_dir.name} ({'LoRA' if fmt == 'hf_lora' else 'Full'})",
+                    "format": fmt,
                     "size_mb": round(sum(f.stat().st_size for f in hf_dir.rglob("*") if f.is_file()) / (1024 * 1024), 1),
-                    "modified": adapter_cfg.stat().st_mtime,
+                    "modified": ref_file.stat().st_mtime,
                 })
             # Numbered checkpoints inside
             for ckpt_dir in sorted(hf_dir.glob("checkpoint-*"), key=lambda p: p.stat().st_mtime, reverse=True):
-                cfg = ckpt_dir / "adapter_config.json"
-                if cfg.exists():
+                lora_cfg = ckpt_dir / "adapter_config.json"
+                full_cfg = ckpt_dir / "config.json"
+                
+                if lora_cfg.exists() or full_cfg.exists():
+                    fmt = "hf_lora" if lora_cfg.exists() else "hf_full"
+                    ref_file = lora_cfg if lora_cfg.exists() else full_cfg
+                    
                     checkpoints.append({
                         "path": str(ckpt_dir),
-                        "name": ckpt_dir.name,
-                        "format": "hf_lora",
+                        "name": f"{ckpt_dir.name} ({'LoRA' if fmt == 'hf_lora' else 'Full'})",
+                        "format": fmt,
                         "size_mb": round(sum(f.stat().st_size for f in ckpt_dir.rglob("*") if f.is_file()) / (1024 * 1024), 1),
-                        "modified": cfg.stat().st_mtime,
+                        "modified": ref_file.stat().st_mtime,
                     })
 
         # Sort all by modification time, newest first
