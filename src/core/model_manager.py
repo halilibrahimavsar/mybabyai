@@ -319,11 +319,16 @@ class ModelManager:
             if num_added > 0:
                 self.logger.info(f"Tokenizer'a {num_added} adet özel token (kod/yapı) eklendi.")
             
-            if self.tokenizer.pad_token is None:
-                if "<|pad|>" in self.tokenizer.get_vocab():
-                    self.tokenizer.pad_token = "<|pad|>"
-                else:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
+            vocab = self.tokenizer.get_vocab()
+            if "<|pad|>" in vocab:
+                self.tokenizer.pad_token = "<|pad|>"
+            elif self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+            if "<|eos|>" in vocab:
+                self.tokenizer.eos_token = "<|eos|>"
+            if "<|unk|>" in vocab:
+                self.tokenizer.unk_token = "<|unk|>"
                     
             vocab_size = len(self.tokenizer)
             self.tokenizer.vocab_size_actual = vocab_size

@@ -144,6 +144,15 @@ class CodeMindAdapter:
         num_experts = int(checkpoint_config.get("num_experts", 1))
         num_experts_per_tok = int(checkpoint_config.get("num_experts_per_tok", 1))
 
+        # Optional speed/quality knobs (safe defaults)
+        use_cache = bool(checkpoint_config.get("use_cache", True))
+        use_flash_attention = bool(checkpoint_config.get("use_flash_attention", False))
+        use_mod = bool(checkpoint_config.get("use_mod", False))
+        mod_capacity_factor = float(checkpoint_config.get("mod_capacity_factor", 0.5))
+        rope_scaling = checkpoint_config.get("rope_scaling", None)
+        if rope_scaling is not None and not isinstance(rope_scaling, dict):
+            rope_scaling = None
+
         config = CodeMindConfig(
             vocab_size=int(tokenizer_vocab_size),
             hidden_size=hidden_size,
@@ -154,6 +163,11 @@ class CodeMindAdapter:
             max_position_embeddings=max_position_embeddings,
             num_experts=num_experts,
             num_experts_per_tok=num_experts_per_tok,
+            use_cache=use_cache,
+            use_flash_attention=use_flash_attention,
+            use_mod=use_mod,
+            mod_capacity_factor=mod_capacity_factor,
+            rope_scaling=rope_scaling,
         )
         return CodeMindForCausalLM(config)
 
@@ -304,8 +318,17 @@ class CodeMindAdapter:
             self.tokenizer = AutoTokenizer.from_pretrained(pretrained_tok, trust_remote_code=True)
             special_tokens = ["<|pad|>", "<|eos|>", "<|unk|>", "<|tr|>", "<|python|>", "<|dart|>", "<|javascript|>", "▁"]
             self.tokenizer.add_tokens(special_tokens, special_tokens=True)
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = "<|pad|>" if "<|pad|>" in self.tokenizer.get_vocab() else self.tokenizer.eos_token
+            vocab = self.tokenizer.get_vocab()
+            if "<|pad|>" in vocab:
+                self.tokenizer.pad_token = "<|pad|>"
+            elif self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+            # Prefer explicit <|eos|>/<|unk|> tokens when available (matches prompt templates)
+            if "<|eos|>" in vocab:
+                self.tokenizer.eos_token = "<|eos|>"
+            if "<|unk|>" in vocab:
+                self.tokenizer.unk_token = "<|unk|>"
             tokenizer_vocab = len(self.tokenizer)
             self.tokenizer.vocab_size_actual = tokenizer_vocab
         elif tokenizer_path.exists() and (tokenizer_path / "tokenizer_config.json").exists():
@@ -590,9 +613,14 @@ class CodeMindAdapter:
         if self.model is None or self.tokenizer is None:
             raise ValueError("Model not loaded")
 
-        full_prompt = build_instruction_prompt(user=prompt, language=language, include_eos=False)
-        tokens = self.tokenizer.encode(full_prompt, add_special_tokens=False)
-        input_ids = torch.tensor([tokens], device=self.device)
+        full_prompt = build_instruction_prompt(
+            user=prompt, language=language, include_eos=False
+        )
+        prompt_ids = self.tokenizer.encode(full_prompt, add_special_tokens=False)
+        input_ids = torch.tensor([prompt_ids], device=self.device)
+
+        eos_token_id = getattr(self.tokenizer, "eos_token_id", None)
+        pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
 
         with torch.no_grad():
             output_ids = self.model.generate(
@@ -602,12 +630,15 @@ class CodeMindAdapter:
                 top_k=top_k,
                 top_p=top_p,
                 do_sample=True,
+                eos_token_id=eos_token_id if isinstance(eos_token_id, int) else None,
+                pad_token_id=pad_token_id if isinstance(pad_token_id, int) else None,
+                use_cache=True,
             )
 
-        generated = self.tokenizer.decode(
-            output_ids[0].tolist(), skip_special_tokens=True
-        )
-        return extract_assistant_response(generated)
+        # Decode only the newly generated continuation (avoid relying on prompt markers).
+        full = output_ids[0].tolist()
+        gen_ids = full[len(prompt_ids) :]
+        return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
     def generate_stream(
         self,
@@ -620,41 +651,53 @@ class CodeMindAdapter:
         if self.model is None or self.tokenizer is None:
             raise ValueError("Model not loaded")
 
-        full_prompt = build_instruction_prompt(user=prompt, language=language, include_eos=False)
-        tokens = self.tokenizer.encode(full_prompt, add_special_tokens=False)
-        input_ids = torch.tensor([tokens], device=self.device)
+        full_prompt = build_instruction_prompt(
+            user=prompt, language=language, include_eos=False
+        )
+        prompt_ids = self.tokenizer.encode(full_prompt, add_special_tokens=False)
+        input_ids = torch.tensor([prompt_ids], device=self.device)
 
-        generated_tokens: List[int] = []
+        eos_token_id = getattr(self.tokenizer, "eos_token_id", None)
+        if not isinstance(eos_token_id, int):
+            # Fallback for custom tokenizers
+            eos_token_id = None
+            if hasattr(self.tokenizer, "token_to_id"):
+                try:
+                    eos_token_id = int(self.tokenizer.token_to_id("<|eos|>"))
+                except Exception:
+                    eos_token_id = None
+
+        past_key_values = None
 
         with torch.no_grad():
-            for _ in range(max_new_tokens):
-                outputs = self.model(
-                    input_ids=torch.cat(
-                        [input_ids, torch.tensor([generated_tokens], device=self.device)],
-                        dim=1,
-                    )
-                    if generated_tokens
-                    else input_ids,
-                    attention_mask=None,
-                )
+            # Prime KV-cache with the prompt in one forward pass.
+            outputs = self.model(input_ids=input_ids, use_cache=True)
+            past_key_values = outputs.past_key_values if hasattr(outputs, "past_key_values") else outputs.get("past_key_values")
 
+            for _ in range(max_new_tokens):
                 logits = outputs["logits"][:, -1, :] / temperature
 
                 if top_k > 0:
-                    indices_to_remove = (
-                        logits < torch.topk(logits, top_k)[0][..., -1, None]
-                    )
-                    logits[indices_to_remove] = float("-inf")
+                    kth = torch.topk(logits, top_k)[0][..., -1, None]
+                    logits = logits.masked_fill(logits < kth, float("-inf"))
 
                 probs = torch.softmax(logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
-                token_id = next_token.item()
-                generated_tokens.append(token_id)
+                token_id = int(next_token.item())
 
-                token_text = self.tokenizer.decode([token_id], skip_special_tokens=True)
-                if token_id == self.tokenizer.token_to_id("<|eos|>"):
+                if eos_token_id is not None and token_id == eos_token_id:
                     break
-                yield token_text
+
+                yield self.tokenizer.decode([token_id], skip_special_tokens=True)
+
+                # Next step: feed only the last token + cached KV
+                outputs = self.model(
+                    input_ids=next_token.to(self.device),
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                    attention_mask=None,
+                )
+                past_key_values = outputs.past_key_values if hasattr(outputs, "past_key_values") else outputs.get("past_key_values")
 
     def save_checkpoint(self, path: Optional[Path] = None) -> bool:
         if self.model is None or self.tokenizer is None:

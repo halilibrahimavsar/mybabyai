@@ -3,7 +3,7 @@
   "backend": "tokenizers",
   "bos_token": "<|endoftext|>",
   "clean_up_tokenization_spaces": true,
-  "eos_token": "<|endoftext|>",
+  "eos_token": "<|eos|>",
   "errors": "replace",
   "is_local": false,
   "model_max_length": 4096,

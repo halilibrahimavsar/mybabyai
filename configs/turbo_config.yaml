@@ -6,6 +6,8 @@ app:
 
 model:
   default_model: CodeMind-650M
+  # Turkish-optimized tokenizer + compact prompt tokens
+  pretrained_tokenizer: codemind/checkpoints/tokenizer_tr_v2
   device: cuda
   load_in_4bit: false
   attn_implementation: flash_attention_2
