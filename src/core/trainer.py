@@ -593,6 +593,8 @@ class LoRATrainer:
                     safe_datasets.append(MapToIterableWrapper(d))
                     
             combined_dataset = ChainDataset(safe_datasets)
+        else:
+            combined_dataset = ConcatDataset(datasets) if len(datasets) > 1 else datasets[0]
         return self._train(
             combined_dataset, 
             resume_from_checkpoint=resume_from_checkpoint, 

@@ -277,7 +277,13 @@ class ModelManager:
         experts_per_tok = 1
         num_kv_heads = None  # None → GQA yok (MHA)
         
-        if size == "400M":
+        if size == "10M":
+            hidden_size, layers, heads = 128, 4, 4
+            num_kv_heads = 2
+        elif size == "20M":
+            hidden_size, layers, heads = 192, 6, 6
+            num_kv_heads = 2
+        elif size == "400M":
             # ~400M param: 1024 × 32 layers × 16 heads
             # GQA (4 KV heads) → T4 16GB'da rahat çalışır
             # intermediate_size: SwiGLU için ≈ 2.75× hidden (değil 4×)
