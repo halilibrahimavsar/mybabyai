@@ -31,7 +31,6 @@ from src.core.callbacks import (
     StopCallback,
     EnhancedNotebookCallback,
     CompactNotebookMetricsCallback,
-    NotebookProgressBarCallback,
 )
 from src.core.datasets import TextDataset, ConversationDataset
 
@@ -746,8 +745,7 @@ class LoRATrainer:
             callbacks.append(UIProgressCallback(self.progress_callback))
         
         if use_notebook_callback:
-            callbacks.append(NotebookProgressBarCallback())
-            callbacks.append(CompactNotebookMetricsCallback(append_lines=True))
+            callbacks.append(CompactNotebookMetricsCallback(append_lines=True, show_progress=True))
 
         # Add stop callback
         self.should_stop = False

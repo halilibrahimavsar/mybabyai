@@ -3,7 +3,8 @@ import math
 import psutil
 import torch
 import html as _html
-from typing import Callable, Optional
+from collections import deque
+from typing import Callable, Deque, Optional
 from transformers import TrainerCallback
 
 
@@ -72,63 +73,6 @@ except ImportError:
     class EnhancedNotebookCallback(TrainerCallback):
         pass
 
-class NotebookProgressBarCallback(TrainerCallback):
-    """Notebook-only progress bar (no metrics table)."""
-
-    def __init__(self, width: int = 300):
-        super().__init__()
-        self.width = int(width)
-        self._pbar = None
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        try:
-            from transformers.utils.notebook import NotebookProgressBar
-        except Exception:
-            return
-
-        total = int(getattr(state, "max_steps", 0) or 0)
-        if total <= 0:
-            total = int(getattr(args, "max_steps", 0) or 0)
-        if total <= 0:
-            return
-
-        self._pbar = NotebookProgressBar(total, width=self.width)
-        try:
-            self._pbar.update(0, force_update=True)
-        except Exception:
-            pass
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if self._pbar is None:
-            return
-        try:
-            epoch = getattr(state, "epoch", None)
-            if epoch is None:
-                comment = None
-            else:
-                epoch_str = (
-                    int(epoch) if int(epoch) == epoch else f"{epoch:.2f}"
-                )
-                num_epochs = getattr(state, "num_train_epochs", None)
-                if num_epochs is None:
-                    num_epochs = getattr(args, "num_train_epochs", None)
-                comment = (
-                    f"Epoch {epoch_str}/{int(num_epochs)}"
-                    if num_epochs is not None
-                    else f"Epoch {epoch_str}"
-                )
-            self._pbar.update(int(state.global_step) + 1, comment=comment)
-        except Exception:
-            pass
-
-    def on_train_end(self, args, state, control, **kwargs):
-        if self._pbar is None:
-            return
-        try:
-            self._pbar.update(int(getattr(self._pbar, "total", 0) or 0), force_update=True)
-        except Exception:
-            pass
-
 class CompactNotebookMetricsCallback(TrainerCallback):
     """
     Single-line, table-like HTML metrics display for notebook environments.
@@ -136,13 +80,23 @@ class CompactNotebookMetricsCallback(TrainerCallback):
     Uses an in-place `display_id` update so the output stays one row (no growing table).
     """
 
-    def __init__(self, max_loss_for_ppl: float = 80.0, append_lines: bool = False):
+    def __init__(
+        self,
+        max_loss_for_ppl: float = 80.0,
+        append_lines: bool = False,
+        max_lines: int = 200,
+        show_progress: bool = True,
+    ):
         super().__init__()
         self.max_loss_for_ppl = float(max_loss_for_ppl)
         self.append_lines = bool(append_lines)
+        self.max_lines = int(max_lines)
+        self.show_progress = bool(show_progress)
         self._start_time: Optional[float] = None
         self._handle = None
         self._header_shown = False
+        self._lines: Deque[str] = deque(maxlen=max(1, self.max_lines))
+        self._header = "| step -- | loss -- | ppl -- | grad -- | lr -- | tok/s -- | gpu -- | cpu/ram --/-- | eta --:-- |"
 
     @staticmethod
     def _fmt_eta(seconds: Optional[float]) -> str:
@@ -167,8 +121,6 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         return int(getattr(args, "world_size", 1) or 1)
 
     def _ensure_display(self) -> None:
-        if self.append_lines:
-            return
         if self._handle is not None:
             return
         try:
@@ -176,7 +128,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         except Exception:
             return
 
-        header = "| step -- | loss -- | ppl -- | grad -- | lr -- | tok/s -- | gpu -- | cpu/ram --/-- | eta --:-- |"
+        header = self._header
         style = (
             "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "
             "\"Liberation Mono\", \"Courier New\", monospace; "
@@ -190,7 +142,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
     def _show_header_if_needed(self) -> None:
         if self._header_shown:
             return
-        header = "| step -- | loss -- | ppl -- | grad -- | lr -- | tok/s -- | gpu -- | cpu/ram --/-- | eta --:-- |"
+        header = self._header
         self._header_shown = True
         try:
             from IPython.display import HTML, display  # type: ignore
@@ -204,6 +156,54 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         except Exception:
             print(header)
 
+    def _render(self, state, line: Optional[str] = None) -> None:
+        if line is not None:
+            self._lines.append(line)
+
+        max_steps = int(getattr(state, "max_steps", 0) or 0)
+        step = int(getattr(state, "global_step", 0) or 0)
+        pct = (step / max_steps * 100.0) if (self.show_progress and max_steps > 0) else None
+
+        style = (
+            "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "
+            "\"Liberation Mono\", \"Courier New\", monospace; "
+            "white-space: pre; line-height: 1.25;"
+        )
+
+        bar_html = ""
+        if pct is not None and math.isfinite(pct):
+            pct = max(0.0, min(100.0, pct))
+            bar_outer = "width: 320px; height: 10px; border: 1px solid #bbb; background: #f5f5f5; display: inline-block; vertical-align: middle;"
+            bar_inner = f"width: {pct:.2f}%; height: 10px; background: #4c8bf5;"
+            bar_html = (
+                f"<div style='margin: 2px 0 6px 0;'>"
+                f"<span style='{style}'>Progress {pct:6.2f}%</span> "
+                f"<span style='{bar_outer}'><span style='display:block; {bar_inner}'></span></span>"
+                f"</div>"
+            )
+
+        body = self._header + "\n" + "\n".join(self._lines)
+        html = f"<div style='{style}'>{bar_html}{_html.escape(body)}</div>"
+
+        if self._handle is None:
+            try:
+                from IPython.display import HTML, display  # type: ignore
+
+                self._handle = display(HTML(html), display_id=True)
+            except Exception:
+                # Non-notebook fallback: just print the latest line.
+                if line is not None:
+                    print(line)
+            return
+
+        try:
+            from IPython.display import HTML  # type: ignore
+
+            self._handle.update(HTML(html))
+        except Exception:
+            if line is not None:
+                print(line)
+
     def on_train_begin(self, args, state, control, **kwargs):
         if self._start_time is None:
             self._start_time = time.time()
@@ -211,21 +211,18 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             psutil.cpu_percent(interval=None)
         except Exception:
             pass
+        self._ensure_display()
         if self.append_lines:
-            self._show_header_if_needed()
-        else:
-            self._ensure_display()
+            self._lines.clear()
+        self._render(state)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         logs = logs or {}
         if self._start_time is None:
             self._start_time = time.time()
-        if self.append_lines:
-            self._show_header_if_needed()
-        else:
-            self._ensure_display()
-            if self._handle is None:
-                return
+        self._ensure_display()
+        if self._handle is None:
+            return
 
         step = int(getattr(state, "global_step", 0) or 0)
         max_steps = int(getattr(state, "max_steps", 0) or 0)
@@ -312,30 +309,11 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             f" eta {self._fmt_eta(eta):>8} |"
         )
 
-        if self.append_lines:
-            try:
-                from IPython.display import HTML, display  # type: ignore
-
-                style = (
-                    "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "
-                    "\"Liberation Mono\", \"Courier New\", monospace; "
-                    "white-space: pre; line-height: 1.25;"
-                )
-                display(HTML(f"<div style='{style}'>{_html.escape(line)}</div>"))
-            except Exception:
-                print(line)
-        else:
-            try:
-                from IPython.display import HTML  # type: ignore
-
-                style = (
-                    "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "
-                    "\"Liberation Mono\", \"Courier New\", monospace; "
-                    "white-space: pre; line-height: 1.25;"
-                )
-                self._handle.update(HTML(f"<div style='{style}'>{_html.escape(line)}</div>"))
-            except Exception:
-                print(line)
+        self._render(state, line=line if self.append_lines else None)
+        if not self.append_lines:
+            # In non-append mode, keep a single-row output.
+            self._lines.clear()
+            self._render(state, line=line)
 
 class StopCallback(TrainerCallback):
     """Callback to stop training gracefully."""
