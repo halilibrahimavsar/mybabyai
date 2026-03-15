@@ -36,7 +36,7 @@ class CustomTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.start_time = time.time()
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: Dict[str, float], *args, **kwargs) -> None:
         if "loss" in logs:
             elapsed = time.time() - self.start_time
             state = self.state
@@ -66,7 +66,7 @@ class CustomTrainer(Trainer):
                 gpu_alloc = torch.cuda.memory_allocated() / (1024 ** 3)
                 logs["GPU"] = f"{gpu_alloc:.1f}GB"
                 
-        super().log(logs)
+        super().log(logs, *args, **kwargs)
 
 class LoRATrainer:
     def __init__(self, model_manager: ModelManager, config: Optional[Config] = None):
