@@ -75,6 +75,31 @@ class CustomTrainer(Trainer):
                 
         super().log(logs, *args, **kwargs)
 
+        # Enrichment: Manually push custom metrics to the notebook tracker if it exists
+        if "loss" in logs:
+            try:
+                from src.core.callbacks import EnhancedNotebookCallback
+                for callback in self.callback_handler.callbacks:
+                    if isinstance(callback, EnhancedNotebookCallback):
+                        tt = getattr(callback, "training_tracker", None)
+                        if tt:
+                            # HF's write_line filters keys, but we are calling it directly
+                            # to force our metrics into the display row.
+                            metrics = {
+                                "Step": int(self.state.global_step),
+                                "Training Loss": logs.get("loss", logs.get("Training Loss", 0.0)),
+                            }
+                            custom_keys = ["Grad", "Perplex", "LR", "Speed", "Time", "CPU/RAM", "GPU"]
+                            for k in custom_keys:
+                                if k in logs:
+                                    metrics[k] = logs[k]
+                            
+                            tt.write_line(metrics)
+                            tt.display()
+                        break
+            except Exception:
+                pass
+
 class LoRATrainer:
     def __init__(self, model_manager: ModelManager, config: Optional[Config] = None):
         self.model_manager = model_manager
