@@ -29,6 +29,44 @@ from src.core.training.active_learning import ActiveLearner, ContinuousLearningP
 from src.core.callbacks import UIProgressCallback, StopCallback, NotebookProgressCallback
 from src.core.datasets import TextDataset, ConversationDataset
 
+import math
+
+class CustomTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_time = time.time()
+
+    def log(self, logs: Dict[str, float]) -> None:
+        if "loss" in logs:
+            elapsed = time.time() - self.start_time
+            state = self.state
+            speed = state.global_step / elapsed if elapsed > 0 else 0
+            remaining = state.max_steps - state.global_step
+            eta_sec = remaining / speed if speed > 0 else 0
+            
+            loss_val = logs.get("loss", 0.0)
+            grad_val = logs.get("grad_norm", 0.0)
+            lr_val = logs.get("learning_rate", 0.0)
+            
+            if "grad_norm" in logs:
+                logs["Grad"] = round(grad_val, 4)
+            
+            if isinstance(loss_val, (int, float)) and math.isfinite(loss_val):
+                logs["Perplex"] = round(math.exp(min(float(loss_val), 20.0)), 2)
+                
+            logs["LR"] = f"{lr_val:.2e}"
+            logs["Speed"] = f"{speed:.2f}"
+            logs["Time"] = f"{elapsed/60:.1f}m"
+            
+            cpu_pct = psutil.cpu_percent()
+            ram_pct = psutil.virtual_memory().percent
+            logs["CPU/RAM"] = f"{cpu_pct:.0f}%/{ram_pct:.0f}%"
+            
+            if torch.cuda.is_available():
+                gpu_alloc = torch.cuda.memory_allocated() / (1024 ** 3)
+                logs["GPU"] = f"{gpu_alloc:.1f}GB"
+                
+        super().log(logs)
 
 class LoRATrainer:
     def __init__(self, model_manager: ModelManager, config: Optional[Config] = None):
@@ -779,7 +817,7 @@ class LoRATrainer:
 
         callbacks.append(CodeMindCheckpointCallback(self))
 
-        self.trainer = Trainer(
+        self.trainer = CustomTrainer(
             model=self.model_manager.model,
             args=self.training_args,
             train_dataset=dataset,

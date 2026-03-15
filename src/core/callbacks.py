@@ -58,85 +58,8 @@ class UIProgressCallback(TrainerCallback):
 
 
 class NotebookProgressCallback(TrainerCallback):
-    """Plain-text progress logger for Jupyter / Colab notebooks.
-
-    Every 10 steps (plus the very first and last), prints a clean block
-    showing all key training metrics in a simple, scrollable format.
-    No Rich tables, no live updates — just plain stdout lines.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.start_time = None
-
-    # ── lifecycle hooks ────────────────────────────────────────────────────
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        self.start_time = time.time()
-        print("=" * 60)
-        print("  🚀  CodeMind Eğitimi Başladı")
-        print("=" * 60)
-
-    def on_train_end(self, args, state, control, **kwargs):
-        elapsed = time.time() - self.start_time if self.start_time else 0
-        print("=" * 60)
-        print(f"  ✅  Eğitim Tamamlandı  —  Toplam süre: {elapsed / 60:.1f} dk")
-        print("=" * 60)
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if not (logs and "loss" in logs):
-            return
-
-        # Log every 10 steps + first + last
-        is_milestone = (
-            state.global_step % 10 == 0
-            or state.global_step == 1
-            or state.global_step == state.max_steps
-        )
-        if not is_milestone:
-            return
-
-        elapsed = time.time() - self.start_time if self.start_time else 0
-        speed = state.global_step / elapsed if elapsed > 0 else 0
-        remaining = state.max_steps - state.global_step
-        eta_sec = remaining / speed if speed > 0 else 0
-
-        loss_val = logs.get("loss", 0.0)
-        grad_val = logs.get("grad_norm", 0.0)
-        lr_val = logs.get("learning_rate", 0.0)
-
-        # Perplexity — cap at 20 to avoid overflow
-        if isinstance(loss_val, (int, float)) and math.isfinite(loss_val):
-            ppl_str = f"{math.exp(min(float(loss_val), 20.0)):.2f}"
-        else:
-            ppl_str = "N/A"
-
-        # Hardware
-        cpu_pct = psutil.cpu_percent()
-        ram_pct = psutil.virtual_memory().percent
-        gpu_line = ""
-        if torch.cuda.is_available():
-            gpu_alloc = torch.cuda.memory_allocated() / 1024 ** 3
-            gpu_total = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
-            gpu_line = f"  GPU    : {gpu_alloc:.2f} GB / {gpu_total:.1f} GB"
-
-        # ASCII progress bar (30 chars wide)
-        pct = state.global_step / state.max_steps if state.max_steps > 0 else 0
-        filled = int(pct * 30)
-        bar = "█" * filled + "░" * (30 - filled)
-
-        print("─" * 60)
-        print(f"  Step   : {state.global_step} / {state.max_steps}  [{bar}]  {pct * 100:.1f}%")
-        print(f"  Epoch  : {state.epoch:.3f}")
-        print(f"  Loss   : {loss_val:.6f}")
-        print(f"  Grad   : {grad_val:.4f}")
-        print(f"  Perplex: {ppl_str}")
-        print(f"  LR     : {lr_val:.2e}")
-        print(f"  Speed  : {speed:.2f} steps/s")
-        print(f"  Time   : {elapsed / 60:.1f} dk geçti  |  ETA: {eta_sec / 60:.1f} dk")
-        print(f"  CPU    : {cpu_pct:.1f}%  |  RAM: {ram_pct:.1f}%")
-        if gpu_line:
-            print(gpu_line)
+    """(Disabled) Placeholder for notebook progress. Now handled via CustomTrainer."""
+    pass
 
 
 class StopCallback(TrainerCallback):
