@@ -230,6 +230,30 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         loss = logs.get("loss", None)
         loss_f = float(loss) if isinstance(loss, (int, float)) and math.isfinite(loss) else float("nan")
 
+        # Normalize displayed loss/ppl when HF logs a grad-accumulation-scaled loss.
+        # In some Trainer configurations, `logs["loss"]` can be effectively multiplied
+        # by `gradient_accumulation_steps`, which makes ppl explode (exp(loss)).
+        grad_acc = int(getattr(args, "gradient_accumulation_steps", 1) or 1)
+        vocab_size = None
+        try:
+            model = kwargs.get("model", None)
+            if model is not None and hasattr(model, "config"):
+                vocab_size = int(getattr(model.config, "vocab_size", 0) or 0)
+        except Exception:
+            vocab_size = None
+        if not vocab_size:
+            vocab_size = 50257
+
+        norm_div = 1
+        if grad_acc > 1 and math.isfinite(loss_f):
+            # Heuristic: typical random-init CE loss ≈ ln(vocab).
+            # If the logged loss is far above that, assume it's scaled by grad_acc.
+            expected = math.log(max(2, vocab_size))
+            if loss_f > expected * 1.5:
+                norm_div = grad_acc
+
+        loss_display = (loss_f / norm_div) if (math.isfinite(loss_f) and norm_div > 1) else loss_f
+
         # Prefer Trainer-provided grad norm if present; otherwise keep blank.
         grad = logs.get("grad_norm", logs.get("Grad", None))
         grad_f = float(grad) if isinstance(grad, (int, float)) and math.isfinite(grad) else float("nan")
@@ -238,9 +262,9 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         lr_f = float(lr) if isinstance(lr, (int, float)) and math.isfinite(lr) else float("nan")
 
         ppl = float("nan")
-        if math.isfinite(loss_f):
+        if math.isfinite(loss_display):
             try:
-                ppl = math.exp(min(loss_f, self.max_loss_for_ppl))
+                ppl = math.exp(min(loss_display, self.max_loss_for_ppl))
             except OverflowError:
                 ppl = float("inf")
             except Exception:
@@ -299,7 +323,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
 
         line = (
             f"| step {step:>6d} |"
-            f" loss {_fmt_float(loss_f, 7, 4).strip():>7} |"
+            f" loss {_fmt_float(loss_display, 7, 4).strip():>7} |"
             f" ppl {_fmt_ppl(ppl, 11).strip():>11} |"
             f" grad {_fmt_float(grad_f, 7, 3).strip():>7} |"
             f" lr {_fmt_sci(lr_f, 10).strip():>10} |"

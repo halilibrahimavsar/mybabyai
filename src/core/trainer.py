@@ -64,7 +64,21 @@ class CustomTrainer(Trainer):
                 logs["Grad"] = round(grad_val, 4)
             
             if isinstance(loss_val, (int, float)) and math.isfinite(loss_val):
-                logs["Perplex"] = round(math.exp(min(float(loss_val), 20.0)), 2)
+                # Match CompactNotebookMetricsCallback: normalize ppl if loss is scaled by grad-accumulation.
+                grad_acc = int(getattr(self.args, "gradient_accumulation_steps", 1) or 1)
+                vocab_size = 50257
+                try:
+                    if hasattr(self.model, "config"):
+                        vocab_size = int(getattr(self.model.config, "vocab_size", vocab_size) or vocab_size)
+                except Exception:
+                    pass
+                norm_div = 1
+                if grad_acc > 1:
+                    expected = math.log(max(2, vocab_size))
+                    if float(loss_val) > expected * 1.5:
+                        norm_div = grad_acc
+                loss_for_ppl = float(loss_val) / norm_div
+                logs["Perplex"] = round(math.exp(min(loss_for_ppl, 20.0)), 2)
                 
             logs["LR"] = f"{lr_val:.2e}"
             logs["Speed"] = f"{speed:.2f}"
