@@ -190,7 +190,10 @@ class CompactNotebookMetricsCallback(TrainerCallback):
                 epoch_total = int(total_val) if isinstance(total_val, (int, float)) and math.isfinite(total_val) else None
 
                 if epoch_cur is not None and epoch_total is not None:
-                    epoch_suffix = f"  epoch {epoch_cur}/{epoch_total}"
+                    if epoch_total > 1_000_000:  # Detect sys.maxsize / streaming
+                        epoch_suffix = f"  step {step}/{max_steps}" if max_steps > 0 else f"  step {step}"
+                    else:
+                        epoch_suffix = f"  epoch {epoch_cur}/{epoch_total}"
             except Exception:
                 epoch_suffix = ""
 
@@ -251,7 +254,23 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         loss = logs.get("loss", None)
         loss_f = float(loss) if isinstance(loss, (int, float)) and math.isfinite(loss) else float("nan")
 
-        loss_display = loss_f
+        # Re-implement normalization for PPL/Loss display because HF logs summed loss in this env
+        grad_acc = int(getattr(args, "gradient_accumulation_steps", 1) or 1)
+        vocab_size = 50257
+        try:
+            model = kwargs.get("model", None)
+            if model is not None and hasattr(model, "config"):
+                vocab_size = int(getattr(model.config, "vocab_size", 50257) or 50257)
+        except Exception:
+            pass
+
+        norm_div = 1
+        if grad_acc > 1 and math.isfinite(loss_f):
+            expected = math.log(max(2, vocab_size))
+            if loss_f > expected * 1.5:
+                norm_div = grad_acc
+
+        loss_display = (loss_f / norm_div) if (math.isfinite(loss_f) and norm_div > 1) else loss_f
 
         # Prefer Trainer-provided grad norm if present; otherwise keep blank.
         grad = logs.get("grad_norm", logs.get("Grad", None))
