@@ -26,7 +26,13 @@ from src.core.training.meta_learning import MAMLTrainer, MAMLConfig, TaskSampler
 from src.core.training.active_learning import ActiveLearner, ContinuousLearningPipeline
 
 
-from src.core.callbacks import UIProgressCallback, StopCallback, EnhancedNotebookCallback
+from src.core.callbacks import (
+    UIProgressCallback,
+    StopCallback,
+    EnhancedNotebookCallback,
+    CompactNotebookMetricsCallback,
+    NotebookProgressBarCallback,
+)
 from src.core.datasets import TextDataset, ConversationDataset
 
 import math
@@ -112,6 +118,7 @@ class LoRATrainer:
         self.progress_callback = None
         self.should_stop = False
         self.current_training_type = "lora"
+        self._last_max_length: Optional[int] = None
 
     def prepare_model_for_training(self, training_type: str = "lora", **kwargs) -> None:
         self.current_training_type = training_type
@@ -369,6 +376,7 @@ class LoRATrainer:
                 ),
             )
         )
+        self._last_max_length = max_length
         pack_sequences = bool(
             training_kwargs.pop(
                 "pack_sequences", self.config.get("training.pack_sequences", True)
@@ -416,6 +424,7 @@ class LoRATrainer:
                 ),
             )
         )
+        self._last_max_length = max_length
         pack_sequences = bool(
             training_kwargs.pop(
                 "pack_sequences", self.config.get("training.pack_sequences", True)
@@ -502,6 +511,7 @@ class LoRATrainer:
                 ),
             )
         )
+        self._last_max_length = max_length
 
         # Auto-cap max_length for low-VRAM GPUs removed.
         # User explicitly requested to handle OOM on their own.
@@ -685,6 +695,11 @@ class LoRATrainer:
                 kwargs["max_steps"] = config_max_steps
 
         self.create_training_args(**kwargs)
+        if self.training_args is not None and self._last_max_length is not None:
+            try:
+                setattr(self.training_args, "codemind_max_length", int(self._last_max_length))
+            except Exception:
+                pass
         
         # Streaming modu için multiprocessing DataLoader sorun yaratabilir
         if has_streaming:
@@ -731,7 +746,8 @@ class LoRATrainer:
             callbacks.append(UIProgressCallback(self.progress_callback))
         
         if use_notebook_callback:
-            callbacks.append(EnhancedNotebookCallback())
+            callbacks.append(NotebookProgressBarCallback())
+            callbacks.append(CompactNotebookMetricsCallback(append_lines=True))
 
         # Add stop callback
         self.should_stop = False
