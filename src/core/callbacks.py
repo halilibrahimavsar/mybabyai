@@ -57,9 +57,31 @@ class UIProgressCallback(TrainerCallback):
             })
 
 
-class NotebookProgressCallback(TrainerCallback):
-    """(Disabled) Placeholder for notebook progress. Now handled via CustomTrainer."""
-    pass
+try:
+    from transformers.utils.notebook import NotebookProgressCallback as HFNotebookCallback
+    from transformers.trainer_utils import IntervalStrategy
+
+    class EnhancedNotebookCallback(HFNotebookCallback):
+        """Replaces HF's default NotebookProgressCallback to display custom metrics."""
+        
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if args.eval_strategy == IntervalStrategy.NO and logs and "loss" in logs:
+                if self.training_tracker is None:
+                    return
+                # Standard attributes
+                values = {"Training Loss": logs["loss"]}
+                values["Step"] = state.global_step
+                
+                # Our custom attributes
+                custom_keys = ["Grad", "Perplex", "LR", "Speed", "Time", "CPU/RAM", "GPU"]
+                for k in custom_keys:
+                    if k in logs:
+                        values[k] = logs[k]
+                        
+                self.training_tracker.write_line(values)
+except ImportError:
+    class EnhancedNotebookCallback(TrainerCallback):
+        pass
 
 
 class StopCallback(TrainerCallback):

@@ -26,7 +26,7 @@ from src.core.training.meta_learning import MAMLTrainer, MAMLConfig, TaskSampler
 from src.core.training.active_learning import ActiveLearner, ContinuousLearningPipeline
 
 
-from src.core.callbacks import UIProgressCallback, StopCallback, NotebookProgressCallback
+from src.core.callbacks import UIProgressCallback, StopCallback, EnhancedNotebookCallback
 from src.core.datasets import TextDataset, ConversationDataset
 
 import math
@@ -35,6 +35,13 @@ class CustomTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.start_time = time.time()
+        
+        # Remove HF's default NotebookProgressCallback if it was added automatically
+        try:
+            from transformers.utils.notebook import NotebookProgressCallback as HFNotebookCallback
+            self.remove_callback(HFNotebookCallback)
+        except Exception:
+            pass
 
     def log(self, logs: Dict[str, float], *args, **kwargs) -> None:
         if "loss" in logs:
@@ -66,20 +73,6 @@ class CustomTrainer(Trainer):
                 gpu_alloc = torch.cuda.memory_allocated() / (1024 ** 3)
                 logs["GPU"] = f"{gpu_alloc:.1f}GB"
                 
-        # Hack for notebook rendering: HuggingFace NotebookTrainingTracker uses hardcoded table keys.
-        # We can intercept format_metrics.
-        import transformers.utils.notebook as notebook_utils
-        if hasattr(notebook_utils, "format_metrics") and not getattr(notebook_utils.format_metrics, "_is_patched", False):
-            _orig_format_metrics = notebook_utils.format_metrics
-            def _patched_format_metrics(metrics):
-                formatted = _orig_format_metrics(metrics)
-                for k, v in metrics.items():
-                    if k not in ["loss", "learning_rate", "epoch", "step"] and k in ["Grad", "Perplex", "LR", "Speed", "Time", "CPU/RAM", "GPU"]:
-                        formatted[k] = v
-                return formatted
-            _patched_format_metrics._is_patched = True
-            notebook_utils.format_metrics = _patched_format_metrics
-            
         super().log(logs, *args, **kwargs)
 
 class LoRATrainer:
@@ -713,7 +706,7 @@ class LoRATrainer:
             callbacks.append(UIProgressCallback(self.progress_callback))
         
         if use_notebook_callback:
-            callbacks.append(NotebookProgressCallback())
+            callbacks.append(EnhancedNotebookCallback())
 
         # Add stop callback
         self.should_stop = False
