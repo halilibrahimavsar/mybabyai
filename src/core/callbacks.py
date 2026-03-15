@@ -18,12 +18,14 @@ class UIProgressCallback(TrainerCallback):
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if self.progress_fn and state.max_steps > 0:
-            if self.start_time is None:
+            if getattr(self, "start_time", None) is None:
                 self.start_time = time.time()
+                self.start_step = getattr(state, "global_step", 0)
 
             logs = logs or {}
             elapsed_time = time.time() - self.start_time
-            steps_per_sec = state.global_step / elapsed_time if elapsed_time > 0 else 0
+            step_diff = state.global_step - self.start_step
+            steps_per_sec = step_diff / elapsed_time if elapsed_time > 0 else 0
 
             remaining_steps = state.max_steps - state.global_step
             eta = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0
@@ -93,6 +95,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         self.max_lines = int(max_lines)
         self.show_progress = bool(show_progress)
         self._start_time: Optional[float] = None
+        self._start_step: int = 0
         self._handle = None
         self._header_shown = False
         self._lines: Deque[str] = deque(maxlen=max(1, self.max_lines))
@@ -179,7 +182,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             epoch_suffix = ""
             try:
                 epoch_val = getattr(state, "epoch", None)
-                epoch_cur = int(epoch_val) if isinstance(epoch_val, (int, float)) and math.isfinite(epoch_val) else None
+                epoch_cur = math.ceil(epoch_val) if isinstance(epoch_val, (int, float)) and math.isfinite(epoch_val) else None
 
                 total_val = getattr(state, "num_train_epochs", None)
                 if not (isinstance(total_val, (int, float)) and math.isfinite(total_val)):
@@ -223,6 +226,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
     def on_train_begin(self, args, state, control, **kwargs):
         if self._start_time is None:
             self._start_time = time.time()
+            self._start_step = getattr(state, "global_step", 0)
         try:
             psutil.cpu_percent(interval=None)
         except Exception:
@@ -236,6 +240,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         logs = logs or {}
         if self._start_time is None:
             self._start_time = time.time()
+            self._start_step = getattr(state, "global_step", 0)
         self._ensure_display()
         if self._handle is None:
             return
@@ -246,29 +251,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         loss = logs.get("loss", None)
         loss_f = float(loss) if isinstance(loss, (int, float)) and math.isfinite(loss) else float("nan")
 
-        # Normalize displayed loss/ppl when HF logs a grad-accumulation-scaled loss.
-        # In some Trainer configurations, `logs["loss"]` can be effectively multiplied
-        # by `gradient_accumulation_steps`, which makes ppl explode (exp(loss)).
-        grad_acc = int(getattr(args, "gradient_accumulation_steps", 1) or 1)
-        vocab_size = None
-        try:
-            model = kwargs.get("model", None)
-            if model is not None and hasattr(model, "config"):
-                vocab_size = int(getattr(model.config, "vocab_size", 0) or 0)
-        except Exception:
-            vocab_size = None
-        if not vocab_size:
-            vocab_size = 50257
-
-        norm_div = 1
-        if grad_acc > 1 and math.isfinite(loss_f):
-            # Heuristic: typical random-init CE loss ≈ ln(vocab).
-            # If the logged loss is far above that, assume it's scaled by grad_acc.
-            expected = math.log(max(2, vocab_size))
-            if loss_f > expected * 1.5:
-                norm_div = grad_acc
-
-        loss_display = (loss_f / norm_div) if (math.isfinite(loss_f) and norm_div > 1) else loss_f
+        loss_display = loss_f
 
         # Prefer Trainer-provided grad norm if present; otherwise keep blank.
         grad = logs.get("grad_norm", logs.get("Grad", None))
@@ -287,7 +270,8 @@ class CompactNotebookMetricsCallback(TrainerCallback):
                 ppl = float("nan")
 
         elapsed = time.time() - self._start_time
-        steps_per_sec = (step / elapsed) if elapsed > 0 else 0.0
+        step_diff = step - self._start_step
+        steps_per_sec = (step_diff / elapsed) if elapsed > 0 else 0.0
         eta = None
         if steps_per_sec > 0 and max_steps > 0:
             eta = (max_steps - step) / steps_per_sec

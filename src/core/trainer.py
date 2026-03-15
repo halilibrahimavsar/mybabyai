@@ -48,11 +48,16 @@ class CustomTrainer(Trainer):
         except Exception:
             pass
 
+        if getattr(self, "start_step", None) is None:
+            self.start_step = self.state.global_step
+            self.start_time = time.time()
+            
     def log(self, logs: Dict[str, float], *args, **kwargs) -> None:
         if "loss" in logs:
             elapsed = time.time() - self.start_time
             state = self.state
-            speed = state.global_step / elapsed if elapsed > 0 else 0
+            step_diff = state.global_step - self.start_step
+            speed = step_diff / elapsed if elapsed > 0 else 0
             remaining = state.max_steps - state.global_step
             eta_sec = remaining / speed if speed > 0 else 0
             
@@ -64,25 +69,18 @@ class CustomTrainer(Trainer):
                 logs["Grad"] = round(grad_val, 4)
             
             if isinstance(loss_val, (int, float)) and math.isfinite(loss_val):
-                # Match CompactNotebookMetricsCallback: normalize ppl if loss is scaled by grad-accumulation.
-                grad_acc = int(getattr(self.args, "gradient_accumulation_steps", 1) or 1)
-                vocab_size = 50257
-                try:
-                    if hasattr(self.model, "config"):
-                        vocab_size = int(getattr(self.model.config, "vocab_size", vocab_size) or vocab_size)
-                except Exception:
-                    pass
-                norm_div = 1
-                if grad_acc > 1:
-                    expected = math.log(max(2, vocab_size))
-                    if float(loss_val) > expected * 1.5:
-                        norm_div = grad_acc
-                loss_for_ppl = float(loss_val) / norm_div
-                logs["Perplex"] = round(math.exp(min(loss_for_ppl, 20.0)), 2)
+                logs["Perplex"] = round(math.exp(min(float(loss_val), 20.0)), 2)
                 
             logs["LR"] = f"{lr_val:.2e}"
             logs["Speed"] = f"{speed:.2f}"
-            logs["Time"] = f"{elapsed/60:.1f}m"
+            
+            # Format time elapsed correctly
+            if elapsed < 3600:
+                m, s = divmod(int(elapsed), 60)
+                logs["Time"] = f"{m:02d}:{s:02d}"
+            else:
+                h, m = divmod(int(elapsed / 60), 60)
+                logs["Time"] = f"{h:02d}h{m:02d}m"
             
             cpu_pct = psutil.cpu_percent()
             ram_pct = psutil.virtual_memory().percent
