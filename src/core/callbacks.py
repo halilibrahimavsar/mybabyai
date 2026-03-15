@@ -156,7 +156,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         except Exception:
             print(header)
 
-    def _render(self, state, line: Optional[str] = None) -> None:
+    def _render(self, args, state, line: Optional[str] = None) -> None:
         if line is not None:
             self._lines.append(line)
 
@@ -175,9 +175,25 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             pct = max(0.0, min(100.0, pct))
             bar_outer = "width: 320px; height: 10px; border: 1px solid #bbb; background: #f5f5f5; display: inline-block; vertical-align: middle;"
             bar_inner = f"width: {pct:.2f}%; height: 10px; background: #4c8bf5;"
+
+            epoch_suffix = ""
+            try:
+                epoch_val = getattr(state, "epoch", None)
+                epoch_cur = int(epoch_val) if isinstance(epoch_val, (int, float)) and math.isfinite(epoch_val) else None
+
+                total_val = getattr(state, "num_train_epochs", None)
+                if not (isinstance(total_val, (int, float)) and math.isfinite(total_val)):
+                    total_val = getattr(args, "num_train_epochs", None)
+                epoch_total = int(total_val) if isinstance(total_val, (int, float)) and math.isfinite(total_val) else None
+
+                if epoch_cur is not None and epoch_total is not None:
+                    epoch_suffix = f"  epoch {epoch_cur}/{epoch_total}"
+            except Exception:
+                epoch_suffix = ""
+
             bar_html = (
                 f"<div style='margin: 2px 0 6px 0;'>"
-                f"<span style='{style}'>Progress {pct:6.2f}%</span> "
+                f"<span style='{style}'>Progress {pct:6.2f}%{_html.escape(epoch_suffix)}</span> "
                 f"<span style='{bar_outer}'><span style='display:block; {bar_inner}'></span></span>"
                 f"</div>"
             )
@@ -214,7 +230,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         self._ensure_display()
         if self.append_lines:
             self._lines.clear()
-        self._render(state)
+        self._render(args, state)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         logs = logs or {}
@@ -333,11 +349,11 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             f" eta {self._fmt_eta(eta):>8} |"
         )
 
-        self._render(state, line=line if self.append_lines else None)
+        self._render(args, state, line=line if self.append_lines else None)
         if not self.append_lines:
             # In non-append mode, keep a single-row output.
             self._lines.clear()
-            self._render(state, line=line)
+            self._render(args, state, line=line)
 
 class StopCallback(TrainerCallback):
     """Callback to stop training gracefully."""
