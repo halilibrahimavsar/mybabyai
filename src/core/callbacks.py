@@ -358,6 +358,11 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             self._lines.clear()
             self._render(args, state, line=line)
 
+    def on_step_end(self, args, state, control, **kwargs):
+        # Update progress bar every step without appending a new log line
+        if self._handle is not None:
+             self._render(args, state)
+
 class StopCallback(TrainerCallback):
     """Callback to stop training gracefully."""
 
