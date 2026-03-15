@@ -66,6 +66,20 @@ class CustomTrainer(Trainer):
                 gpu_alloc = torch.cuda.memory_allocated() / (1024 ** 3)
                 logs["GPU"] = f"{gpu_alloc:.1f}GB"
                 
+        # Hack for notebook rendering: HuggingFace NotebookTrainingTracker uses hardcoded table keys.
+        # We can intercept format_metrics.
+        import transformers.utils.notebook as notebook_utils
+        if hasattr(notebook_utils, "format_metrics") and not getattr(notebook_utils.format_metrics, "_is_patched", False):
+            _orig_format_metrics = notebook_utils.format_metrics
+            def _patched_format_metrics(metrics):
+                formatted = _orig_format_metrics(metrics)
+                for k, v in metrics.items():
+                    if k not in ["loss", "learning_rate", "epoch", "step"] and k in ["Grad", "Perplex", "LR", "Speed", "Time", "CPU/RAM", "GPU"]:
+                        formatted[k] = v
+                return formatted
+            _patched_format_metrics._is_patched = True
+            notebook_utils.format_metrics = _patched_format_metrics
+            
         super().log(logs, *args, **kwargs)
 
 class LoRATrainer:
