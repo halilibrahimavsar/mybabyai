@@ -702,8 +702,8 @@ class LoRATrainer:
         if has_streaming and kwargs.get("max_steps", -1) <= 0:
             config_max_steps = self.config.get("training.max_steps", -1)
             if config_max_steps <= 0:
-                self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Hata almamak için varsayılan 500 adım ayarlanıyor.")
-                kwargs["max_steps"] = 500
+                self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Hata almamak için varsayılan 2000 adım ayarlanıyor.")
+                kwargs["max_steps"] = 2000
             else:
                 kwargs["max_steps"] = config_max_steps
 

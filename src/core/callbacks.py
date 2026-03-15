@@ -96,7 +96,7 @@ class CompactNotebookMetricsCallback(TrainerCallback):
         self._handle = None
         self._header_shown = False
         self._lines: Deque[str] = deque(maxlen=max(1, self.max_lines))
-        self._header = "| step -- | loss -- | ppl -- | grad -- | lr -- | tok/s -- | gpu -- | cpu/ram --/-- | eta --:-- |"
+        self._header = "|  STEP  | LOSS    | PPL         | GRAD    | LR         | TOK/S    | GPU    | CPU/RAM   | ETA      |" + "\n" + ("-" * 100) + "\n"
 
     @staticmethod
     def _fmt_eta(seconds: Optional[float]) -> str:
@@ -338,15 +338,15 @@ class CompactNotebookMetricsCallback(TrainerCallback):
             return f"{val:{width}.2f}"
 
         line = (
-            f"| step {step:>6d} |"
-            f" loss {_fmt_float(loss_display, 7, 4).strip():>7} |"
-            f" ppl {_fmt_ppl(ppl, 11).strip():>11} |"
-            f" grad {_fmt_float(grad_f, 7, 3).strip():>7} |"
-            f" lr {_fmt_sci(lr_f, 10).strip():>10} |"
-            f" tok/s {_fmt_float(tok_s, 8, 0).strip():>8} |"
-            f" gpu {_fmt_float(gpu_alloc_gb, 6, 1).strip():>6} |"
-            f" cpu/ram {cpu:>3.0f}%/{ram:>3.0f}% |"
-            f" eta {self._fmt_eta(eta):>8} |"
+            f"| {step:>6d} |" # STEP
+            f" {_fmt_float(loss_display, 7, 4).strip():>7} |" # LOSS
+            f" {_fmt_ppl(ppl, 11).strip():>11} |" # PPL
+            f" {_fmt_float(grad_f, 7, 3).strip():>7} |" # GRAD
+            f" {_fmt_sci(lr_f, 10).strip():>10} |" # LR
+            f" {_fmt_float(tok_s, 8, 0).strip():>8} |" # TOK/S
+            f" {_fmt_float(gpu_alloc_gb, 6, 1).strip():>6} |" # GPU
+            f" {cpu:>3.0f}%/{ram:>3.0f}% |" # CPU/RAM
+            f" {self._fmt_eta(eta):>8} |" # ETA
         )
 
         self._render(args, state, line=line if self.append_lines else None)

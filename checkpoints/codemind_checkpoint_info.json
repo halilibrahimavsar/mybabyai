@@ -55,7 +55,7 @@
     "vocab_size": 50265,
     "tokenizer_type": "pretrained",
     "special_tokens_hash": "05236797806dcab6",
-    "created_at_utc": "2026-03-15T03:30:55.048996+00:00",
+    "created_at_utc": "2026-03-15T03:37:24.414870+00:00",
     "model_config": {
       "vocab_size": 50265,
       "hidden_size": 192,
