@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QApplication,
 )
 
 
@@ -45,8 +46,19 @@ class MessageBubble(QFrame):
     def __init__(self, text: str, is_user: bool = True, parent=None):
         super().__init__(parent)
         self.is_user = is_user
+        self.text = text
         self.timestamp = datetime.now()
         self._setup_ui(text)
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        copy_action = QAction("Mesajı Kopyala", self)
+        copy_action.triggered.connect(self._copy_to_clipboard)
+        menu.addAction(copy_action)
+        menu.exec(event.globalPos())
+
+    def _copy_to_clipboard(self) -> None:
+        QApplication.clipboard().setText(self.text)
 
     def _setup_ui(self, text: str) -> None:
         layout = QVBoxLayout(self)
@@ -74,6 +86,27 @@ class MessageBubble(QFrame):
         self.time_label.setStyleSheet("QLabel { font-size: 11px; color: #9ca3af; }")
         header_layout.addWidget(self.time_label)
 
+        self.copy_btn = QPushButton("📋")
+        self.copy_btn.setFixedSize(20, 20)
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.setToolTip("Mesajı kopyala")
+        self.copy_btn.setStyleSheet(
+            """
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #94a3b8;
+                font-size: 12px;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #e2e8f0;
+            }
+            """
+        )
+        self.copy_btn.clicked.connect(self._copy_to_clipboard)
+        header_layout.addWidget(self.copy_btn)
+
         layout.addLayout(header_layout)
 
         self.text_label = QLabel(text)
@@ -99,6 +132,7 @@ class MessageBubble(QFrame):
         )
 
     def set_text(self, text: str) -> None:
+        self.text = text
         self.text_label.setText(text)
 
 
@@ -302,6 +336,27 @@ class ChatWidget(QWidget):
         self.export_btn.clicked.connect(self._export_conversation)
         layout.addWidget(self.export_btn)
 
+        self.clear_all_btn = QPushButton("Tüm Geçmişi Temizle")
+        self.clear_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_all_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #7f1d1d;
+                border-radius: 10px;
+                padding: 9px;
+                color: #fca5a5;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #450a0a;
+                border-color: #b91c1c;
+            }
+            """
+        )
+        self.clear_all_btn.clicked.connect(self._delete_all_conversations)
+        layout.addWidget(self.clear_all_btn)
+
         shortcuts_label = QLabel("Enter: Gönder | Shift+Enter: Yeni satır")
         shortcuts_label.setStyleSheet("QLabel { font-size: 11px; color: #94a3b8; }")
         layout.addWidget(shortcuts_label)
@@ -343,6 +398,32 @@ class ChatWidget(QWidget):
         )
         subtitle_row.addWidget(self.chat_subtitle_label)
         subtitle_row.addStretch()
+
+        self.copy_conv_btn = QPushButton("Kopyala")
+        self.copy_conv_btn.setEnabled(False)
+        self.copy_conv_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_conv_btn.setStyleSheet(
+            """
+            QPushButton {
+                background: #334155;
+                color: #e2e8f0;
+                border: none;
+                border-radius: 9px;
+                padding: 2px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover:enabled {
+                background: #475569;
+            }
+            QPushButton:disabled {
+                color: #64748b;
+            }
+            """
+        )
+        self.copy_conv_btn.setToolTip("Tüm sohbeti kopyala")
+        self.copy_conv_btn.clicked.connect(self._copy_current_conversation)
+        subtitle_row.addWidget(self.copy_conv_btn)
 
         # Cognitive mode badge (clickable to cycle modes)
         self._cog_badge = QPushButton("Oto ✨")
@@ -564,6 +645,8 @@ class ChatWidget(QWidget):
             self.chat_subtitle_label.setText("Bir mesaj yazarak sohbeti başlatın.")
 
         self.export_btn.setEnabled(self.current_conversation is not None)
+        self.copy_conv_btn.setEnabled(self.current_conversation is not None)
+        self.clear_all_btn.setEnabled(self.conversation_list.count() > 0)
 
     def _add_message_bubble(self, text: str, is_user: bool) -> MessageBubble:
         self._set_empty_state_visible(False)
@@ -919,3 +1002,47 @@ class ChatWidget(QWidget):
             self._update_conversation_header()
 
         self._load_conversations_list()
+
+    def _delete_all_conversations(self) -> None:
+        if not self.database:
+            return
+
+        if self.conversation_list.count() == 0:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Tüm Geçmişi Temizle",
+            "Tüm sohbet geçmişini silmek istediğinize emin misiniz? Bu işlem geri alınamaz.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        if not self.database.delete_all_conversations():
+            QMessageBox.critical(self, "Hata", "Sohbet geçmişi silinemedi.")
+            return
+
+        self.current_conversation = None
+        self.conversation_history = []
+        self.pending_user_input = ""
+        self._clear_messages()
+        self._update_conversation_header()
+        self._load_conversations_list()
+        QMessageBox.information(self, "Başarılı", "Tüm sohbet geçmişi temizlendi.")
+
+    def _copy_current_conversation(self) -> None:
+        if not self.current_conversation or not self.database:
+            return
+
+        content = self.database.export_conversation(
+            self.current_conversation.id, format="txt"
+        )
+        if content:
+            QApplication.clipboard().setText(content)
+            # Find the button and briefly change its text for feedback
+            original_text = self.copy_conv_btn.text()
+            self.copy_conv_btn.setText("Kopyalandı! ✓")
+            QTimer.singleShot(2000, lambda: self.copy_conv_btn.setText(original_text))

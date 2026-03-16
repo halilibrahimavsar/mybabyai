@@ -131,6 +131,18 @@ class Database:
                 return True
             return False
 
+    def delete_all_conversations(self) -> bool:
+        """Delete all conversations and their associated messages."""
+        try:
+            with self.get_session() as session:
+                # SQLAlchemy cascade will handle deleting messages
+                session.query(Conversation).delete()
+                session.commit()
+                return True
+        except Exception as e:
+            self.logger.error(f"Tüm sohbetler silinirken hata: {e}")
+            return False
+
     def add_message(self, conversation_id: int, role: str, content: str) -> Message:
         with self.get_session() as session:
             msg = Message(conversation_id=conversation_id, role=role, content=content)
