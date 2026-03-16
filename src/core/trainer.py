@@ -697,7 +697,23 @@ class LoRATrainer:
                 else:
                     safe_datasets.append(MapToIterableWrapper(d))
                     
-            combined_dataset = ChainDataset(safe_datasets)
+            # Interleave instead of chaining to maintain bilingual balance
+            class InterleavedIterableDataset(IterableDataset):
+                def __init__(self, datasets):
+                    self.datasets = datasets
+                def __iter__(self):
+                    iterators = [iter(d) for d in self.datasets]
+                    while iterators:
+                        new_iterators = []
+                        for it in iterators:
+                            try:
+                                yield next(it)
+                                new_iterators.append(it)
+                            except StopIteration:
+                                continue
+                        iterators = new_iterators
+
+            combined_dataset = InterleavedIterableDataset(safe_datasets)
         else:
             combined_dataset = ConcatDataset(datasets) if len(datasets) > 1 else datasets[0]
         return self._train(
@@ -714,8 +730,9 @@ class LoRATrainer:
         if has_streaming and kwargs.get("max_steps", -1) <= 0:
             config_max_steps = self.config.get("training.max_steps", -1)
             if config_max_steps <= 0:
-                self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Hata almamak için varsayılan 2000 adım ayarlanıyor.")
-                kwargs["max_steps"] = 2000
+                # Default to a large number instead of 2000 to allow longer training
+                self.logger.warning("⚠️ Streaming modunda max_steps belirtilmedi! Varsayılan 50.000 adım ayarlanıyor (manuel durdurana kadar devam eder).")
+                kwargs["max_steps"] = 50000
             else:
                 kwargs["max_steps"] = config_max_steps
 
